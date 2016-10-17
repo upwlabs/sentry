@@ -235,6 +235,8 @@ urlpatterns += patterns(
     url(r'^account/sudo/$', SudoView.as_view(), name='sentry-sudo'),
     url(r'^account/confirm-email/$', accounts.start_confirm_email,
         name='sentry-account-confirm-email-send'),
+    url(r'^account/confirm-email-primary/$', accounts.start_confirm_email_primary,
+        name='sentry-account-confirm-email-send-primary'),
     url(r'^account/confirm-email/(?P<user_id>[\d]+)/(?P<hash>[0-9a-zA-Z]+)/$', accounts.confirm_email,
         name='sentry-account-confirm-email'),
     url(r'^account/recover/$', accounts.recover,

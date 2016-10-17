@@ -121,15 +121,19 @@ def recover_confirm(request, user_id, hash):
 
 
 @login_required
+def start_confirm_email_primary(request):
+    email = UserEmail.get_primary_email(request.user)
+    request.user.send_confirm_email_singular(email)
+    msg = _('A verification email has been sent to %s.') % (email.email)
+    messages.add_message(request, messages.SUCCESS, msg)
+    return HttpResponseRedirect(reverse('sentry-account-settings'))
+
+
+@login_required
 def start_confirm_email(request):
     has_unverified_emails = request.user.has_unverified_emails()
 
-    if 'email' in request.GET:
-        email = request.GET.get('email')
-        email_obj = UserEmail.objects.get(email=email, user=request.user)
-        request.user.send_confirm_email_singular(email_obj)
-        msg = _('A verification email has been sent to %s.') % (email)
-    elif has_unverified_emails:
+    if has_unverified_emails:
         request.user.send_confirm_emails()
         unverified_emails = [e.email for e in request.user.get_unverified_emails()]
         msg = _('A verification email has been sent to %s.') % (', ').join(unverified_emails)

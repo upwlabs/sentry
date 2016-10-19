@@ -208,7 +208,6 @@ class ChangePasswordRecoverForm(forms.Form):
 
 
 class EmailForm(forms.Form):
-    primary_email = forms.EmailField(label=_('Primary Email'))
 
     alt_email = forms.EmailField(
         label=_('New Email'),
@@ -216,26 +215,29 @@ class EmailForm(forms.Form):
         help_text='Designate an alternative email for this account',
     )
 
+    password = forms.CharField(
+        label=_('Current password'),
+        widget=forms.PasswordInput(),
+        help_text='You will need to enter your current account password to make changes.',
+        required=True,
+    )
+
     def __init__(self, user, *args, **kwargs):
         self.user = user
         super(EmailForm, self).__init__(*args, **kwargs)
 
-    def save(self, commit=True):
+        needs_password = user.has_usable_password()
 
-        if self.cleaned_data['primary_email'] != self.user.email:
-            new_username = self.user.email == self.user.username
-        else:
-            new_username = False
+        if not needs_password:
+            del self.fields['password']
 
-        self.user.email = self.cleaned_data['primary_email']
-
-        if new_username and not User.objects.filter(username__iexact=self.user.email).exists():
-            self.user.username = self.user.email
-
-        if commit:
-            self.user.save()
-
-        return self.user
+    def clean_password(self):
+        value = self.cleaned_data.get('password')
+        if value and not self.user.check_password(value):
+            raise forms.ValidationError('The password you entered is not correct.')
+        elif not value:
+            raise forms.ValidationError('You must confirm your current password to make changes.')
+        return value
 
 
 class AccountSettingsForm(forms.Form):
@@ -558,7 +560,8 @@ class ProjectEmailOptionsForm(forms.Form):
         specified_email = UserOption.objects.get_value(user, project, 'mail:email', None)
         emails.extend([user.email, alert_email, specified_email])
 
-        choices = [(email, email) for email in set(emails) if email is not None]
+        choices = [(email, email) for email in sorted(set(emails)) if email]
+
         self.fields['email'].choices = choices
 
         self.fields['alert'].initial = has_alerts

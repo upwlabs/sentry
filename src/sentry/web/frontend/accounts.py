@@ -16,6 +16,7 @@ from django.core.context_processors import csrf
 from django.core.urlresolvers import reverse
 from django.db import IntegrityError, transaction
 from django.http import HttpResponseRedirect, Http404
+from django.views.decorators.http import require_http_methods
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_protect
 from django.utils import timezone
@@ -121,19 +122,18 @@ def recover_confirm(request, user_id, hash):
 
 
 @login_required
-def start_confirm_email_primary(request):
-    email = UserEmail.get_primary_email(request.user)
-    request.user.send_confirm_email_singular(email)
-    msg = _('A verification email has been sent to %s.') % (email.email)
-    messages.add_message(request, messages.SUCCESS, msg)
-    return HttpResponseRedirect(reverse('sentry-account-settings'))
-
-
-@login_required
+@require_http_methods(["POST"])
 def start_confirm_email(request):
     has_unverified_emails = request.user.has_unverified_emails()
 
-    if has_unverified_emails:
+    if 'primary-email' in request.POST:
+        email = request.POST.get('email')
+        email_to_send = UserEmail.objects.get(user=request.user, email=email)
+        request.user.send_confirm_email_singular(email_to_send)
+        msg = _('A verification email has been sent to %s.') % (email)
+        messages.add_message(request, messages.SUCCESS, msg)
+        return HttpResponseRedirect(reverse('sentry-account-settings'))
+    elif has_unverified_emails:
         request.user.send_confirm_emails()
         unverified_emails = [e.email for e in request.user.get_unverified_emails()]
         msg = _('A verification email has been sent to %s.') % (', ').join(unverified_emails)

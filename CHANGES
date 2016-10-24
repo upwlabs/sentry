@@ -36,6 +36,7 @@ Version 8.9
 - Added weekly report emails behind feature flag.
 - Rebrand Rules as Alerts / Alert Rules.
 - Add frequency to Alerts.
+- Send email verification to specific emails
 
 Schema Changes
 ~~~~~~~~~~~~~~

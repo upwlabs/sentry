@@ -134,6 +134,7 @@ function routes() {
 
         <Route path=":projectId/settings/install/" component={errorHandler(ProjectInstall)}>
           <IndexRoute component={errorHandler(ProjectInstallOverview)}/>
+          {/*<Route path="laravel/" component={errorHandler(ProjectInstallLaravel)}/>*/}
           <Route path=":platform/" component={errorHandler(ProjectInstallPlatform)}/>
         </Route>
 

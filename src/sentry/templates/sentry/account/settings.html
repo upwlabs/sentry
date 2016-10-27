@@ -12,7 +12,7 @@
     {% if not email.is_verified %}
       <div class="alert alert-warning alert-block">
         {% trans "Your email address has not been verified. " %}
-        <form action="/account/confirm-email/" method="post" class="email-alert-button">
+        <form action="{% url 'sentry-account-confirm-email-send' %}" method="post" class="email-alert-button">
           {% csrf_token %}
           <input type="hidden" name="email" value="{{ email.email }}">
           <button type="submit" name="primary-email" class="btn-link">{% trans "Resend Verification Email." %}</button>

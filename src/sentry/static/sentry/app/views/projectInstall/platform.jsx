@@ -15,7 +15,8 @@ const WaitingForApp = React.createClass({
 
 const Platform = React.createClass({
   contextTypes: {
-    project: React.PropTypes.object
+    project: React.PropTypes.object,
+    organization: React.PropTypes.object
   },
 
   render() {

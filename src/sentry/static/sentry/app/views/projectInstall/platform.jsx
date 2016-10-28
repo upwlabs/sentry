@@ -1,15 +1,36 @@
 import React from 'react';
+import ProjectActions from '../../actions/projectActions';
 
 const WaitingForApp = React.createClass({
   propTypes: {
-    projectId: React.PropTypes.string,
-    orgId: React.PropTypes.string
+    project: React.PropTypes.object,
+    organization: React.PropTypes.object
+  },
+
+  componentDidMount() {
+    setTimeout(() => {
+      console.log('settimeout finished!');
+      ProjectActions.updateSuccess({
+        id: this.props.project.id,
+        firstEvent: true
+      });
+    }, 2000);
   },
 
   render() {
-    return (
-      <span style={{background: 'yellow'}}>Waiting to hear from your app...</span>
-    );
+    let project = this.props.project;
+    let projectId = project.slug;
+    let orgId = this.props.organization.id;
+    if (!project.firstEvent) {
+      console.log(project.firstEvent);
+      return (
+        <span className="btn btn-default" style={{background: 'yellow'}}>Waiting to hear from your app...</span>
+      );
+    } else {
+      return (
+        <a href={`/${orgId}/${projectId}/`} className="btn btn-default">Go to issues</a>
+      );
+    }
   }
 });
 
@@ -25,7 +46,7 @@ const Platform = React.createClass({
     return (
       <div>
         <h2>Install</h2>
-        <WaitingForApp projectId={project.slug} orgId={organization.slug}/>
+        <WaitingForApp project={project} organization={organization}/>
         <ol>
           <li>
             <h4>Get the Laravel SDK</h4>

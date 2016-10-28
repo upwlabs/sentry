@@ -93,9 +93,11 @@ const ProjectBase = React.createClass({
   },
 
   onProjectChange(projectIds) {
+    console.log('onprojectchange');
+    debugger;
     if (!this.state.project) return;
     if (!projectIds.has(this.state.project.id)) return;
-
+    console.log('also made it here');
     this.setState({
       project: {...ProjectStore.getById(this.state.project.id)}
     });

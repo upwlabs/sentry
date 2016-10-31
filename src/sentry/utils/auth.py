@@ -22,6 +22,10 @@ logger = logging.getLogger('sentry.auth')
 
 _LOGIN_URL = None
 
+SSO_SESSION_KEY = 'sso'
+
+MFA_SESSION_KEY = 'mfa'
+
 
 class AuthUserPasswordExpired(Exception):
 
@@ -53,7 +57,7 @@ def get_pending_2fa_user(request):
     if rv is None:
         return
 
-    user_id, created_at = rv
+    user_id, created_at = rv[:2]
     if created_at < time() - 60 * 5:
         return None
 
@@ -140,6 +144,24 @@ def is_valid_redirect(url):
     return True
 
 
+def mark_sso_complete(request, organization_id):
+    # TODO(dcramer): this needs to be bound based on SSO options (e.g. changing
+    # or enabling SSO invalidates this)
+    sso = request.session.get(SSO_SESSION_KEY, '')
+    if sso:
+        sso = sso.split(',')
+    else:
+        sso = []
+    sso.append(six.text_type(organization_id))
+    request.session[SSO_SESSION_KEY] = ','.join(sso)
+    request.session.modified = True
+
+
+def has_completed_sso(request, organization_id):
+    sso = request.session.get(SSO_SESSION_KEY, '').split(',')
+    return six.text_type(organization_id) in sso
+
+
 def find_users(username, with_valid_password=True, is_active=None):
     """
     Return a list of users that match a username
@@ -165,23 +187,43 @@ def find_users(username, with_valid_password=True, is_active=None):
     return []
 
 
-def login(request, user, passed_2fa=False, after_2fa=None):
-    """This logs a user in for the sesion and current request.  If 2FA is
-    enabled this method will start the 2FA flow and return False, otherwise
-    it will return True.  If `passed_2fa` is set to `True` then the 2FA flow
-    is set to be finalized (user passed the flow).
+def login(request, user, passed_2fa=None, after_2fa=None,
+          organization_id=None):
+    """
+    This logs a user in for the sesion and current request.
+
+    If 2FA is enabled this method will start the MFA flow and return False as
+    required.  If `passed_2fa` is set to `True` then the 2FA flow is set to be
+    finalized (user passed the flow).
+
+    If the session has already resolved MFA in the past, it will automatically
+    detect it from the session.
 
     Optionally `after_2fa` can be set to a URL which will be used to override
     the regular session redirect target directly after the 2fa flow.
+
+    Returns boolean indicating if the user was logged in.
     """
     has_2fa = Authenticator.objects.user_has_2fa(user)
+    if passed_2fa is None:
+        passed_2fa = (
+            request.session.get(MFA_SESSION_KEY, '') == six.text_type(user.id)
+        )
+
     if has_2fa and not passed_2fa:
-        request.session['_pending_2fa'] = [user.id, time()]
+        request.session['_pending_2fa'] = [user.id, time(), organization_id]
         if after_2fa is not None:
             request.session['_after_2fa'] = after_2fa
         return False
 
-    request.session.pop('_pending_2fa', None)
+    # TODO(dcramer): this needs to be bound based on MFA options
+    if passed_2fa:
+        request.session[MFA_SESSION_KEY] = six.text_type(user.id)
+        request.session.modified = True
+
+    mfa_state = request.session.pop('_pending_2fa', ())
+    if organization_id is None and len(mfa_state) == 3:
+        organization_id = mfa_state[2]
 
     # Check for expired passwords here after we cleared the 2fa flow.
     # While this means that users will have to pass 2fa before they can
@@ -200,14 +242,17 @@ def login(request, user, passed_2fa=False, after_2fa=None):
     if not hasattr(user, 'backend'):
         user.backend = settings.AUTHENTICATION_BACKENDS[0]
     _login(request, user)
-    log_auth_success(request, user.username)
+    if organization_id:
+        mark_sso_complete(request, organization_id)
+    log_auth_success(request, user.username, organization_id)
     return True
 
 
-def log_auth_success(request, username):
+def log_auth_success(request, username, organization_id=None):
     logger.info('user.auth.success', extra={
         'ip_address': request.META['REMOTE_ADDR'],
         'username': username,
+        'organization_id': organization_id,
     })
 
 

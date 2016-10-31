@@ -15,8 +15,8 @@ from django.contrib.auth import login as login_user, authenticate
 from django.core.context_processors import csrf
 from django.core.urlresolvers import reverse
 from django.db import IntegrityError, transaction
-from django.http import HttpResponseRedirect, Http404
 from django.views.decorators.http import require_http_methods
+from django.http import HttpResponseRedirect, Http404, HttpResponse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_protect
 from django.utils import timezone
@@ -124,6 +124,17 @@ def recover_confirm(request, user_id, hash):
 @login_required
 @require_http_methods(["POST"])
 def start_confirm_email(request):
+    from sentry.app import ratelimiter
+
+    if ratelimiter.is_limited(
+        'auth:confirm-email:{}'.format(request.user.id),
+        limit=10, window=60,  # 10 per minute should be enough for anyone
+    ):
+        return HttpResponse(
+            'You have made too many email confirmation requests. Please try again later.',
+            content_type='text/plain',
+            status=429,
+        )
 
     if 'primary-email' in request.POST:
         email = request.POST.get('email')

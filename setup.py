@@ -87,6 +87,7 @@ tests_require = [
 
 
 install_requires = [
+    'boto3>=1.4.1,<1.5',
     'celery>=3.1.8,<3.1.19',
     'click>=5.0,<7.0',
     # 'cryptography>=1.3,<1.4',
@@ -110,7 +111,7 @@ install_requires = [
     'lxml>=3.4.1',
 
     'ipaddress>=1.0.16,<1.1.0',
-    'libsourcemap>=0.4.5,<0.5.0',
+    'libsourcemap>=0.5.0,<0.6.0',
     'mock>=0.8.0,<1.1',
     'oauth2>=1.5.167',
     'percy>=0.2.5',

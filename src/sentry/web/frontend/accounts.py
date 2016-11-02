@@ -188,7 +188,11 @@ def account_settings(request):
         form.save()
 
         # update notification settings for those set to primary email with new primary email
-        options = UserOption.objects.filter(user=user)
+        alert_email = UserOption.objects.get_value(user=user, project=None, key='alert_email')
+
+        if alert_email == old_email:
+            UserOption.objects.set_value(user=user, project=None, key='alert_email', value=user.email)
+        options = UserOption.objects.filter(user=user, key='mail:email')
         for option in [o for o in options if o.value == old_email]:
             option.value = user.email
             option.save()
@@ -393,9 +397,13 @@ def show_emails(request):
         if new_primary != user.email:
 
             # update notification settings for those set to primary email with new primary email
-            options = UserOption.objects.filter(user=user)
+            alert_email = UserOption.objects.get_value(user=user, project=None, key='alert_email')
+
+            if alert_email == user.email:
+                UserOption.objects.set_value(user=user, project=None, key='alert_email', value=new_primary)
+            options = UserOption.objects.filter(user=user, key='mail:email')
             for option in [o for o in options if o.value == user.email]:
-                option.value = new_primary
+                option.value = user.email
                 option.save()
 
             new_username = user.email == user.username

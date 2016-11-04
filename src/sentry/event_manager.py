@@ -419,7 +419,12 @@ class EventManager(object):
         message = data.pop('message', '')
 
         if not culprit:
+            # if we generate an implicit culprit, lets not call it a
+            # transaction
+            transaction = None
             culprit = generate_culprit(data, platform=platform)
+        else:
+            transaction = culprit
 
         date = datetime.fromtimestamp(data.pop('timestamp'))
         date = date.replace(tzinfo=timezone.utc)
@@ -450,6 +455,8 @@ class EventManager(object):
             tags.append(('sentry:release', release))
         if environment:
             tags.append(('environment', environment))
+        if transaction:
+            tags.append(('transaction', transaction))
 
         for plugin in plugins.for_project(project, version=None):
             added_tags = safe_execute(plugin.get_tags, event,

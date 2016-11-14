@@ -163,6 +163,6 @@ def _transform(d):
     if type(d) == dict:
         return {_transform(k): _transform(v) for k, v in d.items()}
 
-    if type(d) == long:
+    if type(d) == long or type(d) == int:
         return d >= 2 ** 51 and str(d) + 'l' or d
     return d

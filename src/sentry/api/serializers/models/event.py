@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 
+import copy
 import six
 
 from datetime import datetime
@@ -129,7 +130,8 @@ class EventSerializer(Serializer):
             'dateReceived': received,
             'errors': errors,
         }
-        return d
+        d = copy.deepcopy(d)
+        return _transform(d)
 
 
 class SharedEventSerializer(EventSerializer):
@@ -149,3 +151,18 @@ class SharedEventSerializer(EventSerializer):
             if e['type'] != 'breadcrumbs'
         ]
         return result
+
+
+def _transform(d):
+    if type(d) == tuple:
+        return tuple([_transform(x) for x in d])
+
+    if type(d) == list:
+        return [_transform(x) for x in d]
+
+    if type(d) == dict:
+        return {_transform(k): _transform(v) for k, v in d.items()}
+
+    if type(d) == long:
+        return d >= 2 ** 51 and str(d) + 'l' or d
+    return d

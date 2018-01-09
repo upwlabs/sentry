@@ -7,7 +7,7 @@ sentry.plugins.base.v2
 """
 from __future__ import absolute_import, print_function
 
-__all__ = ('Plugin2',)
+__all__ = ('Plugin2', )
 
 import logging
 import six
@@ -16,9 +16,11 @@ from django.http import HttpResponseRedirect
 from threading import local
 
 from sentry.plugins.config import PluginConfigMixin
+from sentry.plugins.status import PluginStatusMixin
 from sentry.plugins.base.response import Response
 from sentry.plugins.base.configuration import (
-    default_plugin_config, default_plugin_options,
+    default_plugin_config,
+    default_plugin_options,
 )
 from sentry.utils.hashlib import md5_text
 
@@ -33,11 +35,11 @@ class PluginMount(type):
         if not new_cls.slug:
             new_cls.slug = new_cls.title.replace(' ', '-').lower()
         if not hasattr(new_cls, 'logger'):
-            new_cls.logger = logging.getLogger('sentry.plugins.%s' % (new_cls.slug,))
+            new_cls.logger = logging.getLogger('sentry.plugins.%s' % (new_cls.slug, ))
         return new_cls
 
 
-class IPlugin2(local, PluginConfigMixin):
+class IPlugin2(local, PluginConfigMixin, PluginStatusMixin):
     """
     Plugin interface. Should not be inherited from directly.
 
@@ -107,7 +109,7 @@ class IPlugin2(local, PluginConfigMixin):
         return True
 
     def reset_options(self, project=None, user=None):
-        from .helpers import reset_options
+        from sentry.plugins.helpers import reset_options
         return reset_options(self.get_conf_key(), project, user)
 
     def get_option(self, key, project=None, user=None):
@@ -197,9 +199,8 @@ class IPlugin2(local, PluginConfigMixin):
         >>> plugin.get_conf_version(project)
         """
         options = self.get_conf_options(project)
-        return md5_text(
-            '&'.join(sorted('%s=%s' % o for o in six.iteritems(options)))
-        ).hexdigest()[:3]
+        return md5_text('&'.join(sorted('%s=%s' % o
+                                        for o in six.iteritems(options)))).hexdigest()[:3]
 
     def get_conf_title(self):
         """
@@ -212,6 +213,12 @@ class IPlugin2(local, PluginConfigMixin):
 
     def has_project_conf(self):
         return self.project_conf_form is not None
+
+    def has_plugin_conf(self):
+        """
+        Checks if the plugin should be returned in the ProjectPluginsEndpoint
+        """
+        return self.has_project_conf()
 
     def can_configure_for_project(self, project):
         """
@@ -261,6 +268,8 @@ class IPlugin2(local, PluginConfigMixin):
         >>> plugin.get_title()
         """
         return self.title
+
+    get_short_title = get_title
 
     def get_description(self):
         """
@@ -365,6 +374,23 @@ class IPlugin2(local, PluginConfigMixin):
         """
         return []
 
+    def get_stacktrace_processors(self, data, stacktrace_infos, platforms, **kwargs):
+        """
+        This works similarly to `get_event_preprocessors` but returns a
+        function that is invoked for all encountered stacktraces in an
+        event.
+
+        Preprocessors should not be returned if there is nothing to
+        do with the event data.
+
+        :::
+
+            def get_stacktrace_processors(self, data, stacktrace_infos,
+                                          platforms, **kwargs):
+                if 'cocoa' in platforms:
+                    return [CocoaProcessor(data, stacktrace_infos)]
+        """
+
     def get_feature_hooks(self, **kwargs):
         """
         Return a list of callables to check for feature status.
@@ -397,12 +423,27 @@ class IPlugin2(local, PluginConfigMixin):
         """
         return []
 
+    def get_custom_contexts(self):
+        """Return a list of of context types.
+
+        from sentry.interfaces.contexts import ContextType
+
+        class MyContextType(ContextType):
+            type = 'my_type'
+
+        def get_custom_contexts(self):
+            return [MyContextType]
+        """
+
     def configure(self, project, request):
         """Configures the plugin."""
         return default_plugin_config(self, project, request)
 
     def get_url_module(self):
         """Allows a plugin to return the import path to a URL module."""
+
+    def handle_signal(self, name, payload, **kwargs):
+        pass
 
 
 @six.add_metaclass(PluginMount)

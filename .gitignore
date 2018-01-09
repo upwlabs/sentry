@@ -19,6 +19,7 @@ sentry-package.json
 /env
 /tmp
 /node_modules/
+/docs-ui/node_modules/
 /docs/_build
 example/db.sqlite
 /src/sentry/assets.json
@@ -31,3 +32,9 @@ example/db.sqlite
 /src/sentry/integration-docs
 /wheelhouse
 /test_cli/
+Gemfile.lock
+.idea/
+.vscode/tags
+coverage.xml
+junit.xml
+*.codestyle.xml

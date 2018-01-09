@@ -14,6 +14,7 @@ from django.conf import settings
 from django.contrib.auth import login as _login
 from django.contrib.auth.backends import ModelBackend
 from django.core.urlresolvers import reverse, resolve
+from sudo.utils import is_safe_url
 from time import time
 
 from sentry.models import User, Authenticator
@@ -28,7 +29,6 @@ MFA_SESSION_KEY = 'mfa'
 
 
 class AuthUserPasswordExpired(Exception):
-
     def __init__(self, user):
         self.user = user
 
@@ -46,8 +46,7 @@ def parse_auth_header(header):
 
 def get_auth_providers():
     return [
-        key for key, cfg_names
-        in six.iteritems(settings.AUTH_PROVIDERS)
+        key for key, cfg_names in six.iteritems(settings.AUTH_PROVIDERS)
         if all(getattr(settings, c, None) for c in cfg_names)
     ]
 
@@ -86,27 +85,20 @@ def get_login_url(reset=False):
 
         if _LOGIN_URL is None:
             _LOGIN_URL = reverse('sentry-login')
+        # ensure type is coerced to string (to avoid lazy proxies)
+        _LOGIN_URL = six.text_type(_LOGIN_URL)
     return _LOGIN_URL
 
 
 def initiate_login(request, next_url=None):
-    try:
-        del request.session['_after_2fa']
-    except KeyError:
-        pass
-
-    try:
-        del request.session['_pending_2fa']
-    except KeyError:
-        pass
+    for key in ('_next', '_after_2fa', '_pending_2fa'):
+        try:
+            del request.session[key]
+        except KeyError:
+            pass
 
     if next_url:
         request.session['_next'] = next_url
-    else:
-        try:
-            del request.session['_next']
-        except KeyError:
-            pass
 
 
 def get_login_redirect(request, default=None):
@@ -128,20 +120,18 @@ def get_login_redirect(request, default=None):
     if not login_url:
         return default
 
-    if not is_valid_redirect(login_url):
+    if not is_valid_redirect(login_url, host=request.get_host()):
         login_url = default
 
     return login_url
 
 
-def is_valid_redirect(url):
+def is_valid_redirect(url, host=None):
     if not url:
-        return False
-    if url.startswith(('http://', 'https://')):
         return False
     if url.startswith(get_login_url()):
         return False
-    return True
+    return is_safe_url(url, host=host)
 
 
 def mark_sso_complete(request, organization_id):
@@ -187,8 +177,7 @@ def find_users(username, with_valid_password=True, is_active=None):
     return []
 
 
-def login(request, user, passed_2fa=None, after_2fa=None,
-          organization_id=None):
+def login(request, user, passed_2fa=None, after_2fa=None, organization_id=None):
     """
     This logs a user in for the sesion and current request.
 
@@ -206,9 +195,8 @@ def login(request, user, passed_2fa=None, after_2fa=None,
     """
     has_2fa = Authenticator.objects.user_has_2fa(user)
     if passed_2fa is None:
-        passed_2fa = (
-            request.session.get(MFA_SESSION_KEY, '') == six.text_type(user.id)
-        )
+        passed_2fa = (request.session.get(MFA_SESSION_KEY, '')
+                      == six.text_type(user.id))
 
     if has_2fa and not passed_2fa:
         request.session['_pending_2fa'] = [user.id, time(), organization_id]
@@ -236,6 +224,10 @@ def login(request, user, passed_2fa=None, after_2fa=None,
     if user.is_password_expired:
         raise AuthUserPasswordExpired(user)
 
+    # If this User has a nonce value, we need to bind into the session.
+    if user.session_nonce is not None:
+        request.session['_nonce'] = user.session_nonce
+
     # If there is no authentication backend, just attach the first
     # one and hope it goes through.  This apparently is a thing we
     # have been doing for a long time, just moved it to a more
@@ -250,18 +242,39 @@ def login(request, user, passed_2fa=None, after_2fa=None,
 
 
 def log_auth_success(request, username, organization_id=None):
-    logger.info('user.auth.success', extra={
-        'ip_address': request.META['REMOTE_ADDR'],
-        'username': username,
-        'organization_id': organization_id,
-    })
+    logger.info(
+        'user.auth.success',
+        extra={
+            'ip_address': request.META['REMOTE_ADDR'],
+            'username': username,
+            'organization_id': organization_id,
+        }
+    )
 
 
 def log_auth_failure(request, username=None):
-    logger.info('user.auth.fail', extra={
-        'ip_address': request.META['REMOTE_ADDR'],
-        'username': username,
-    })
+    logger.info(
+        'user.auth.fail', extra={
+            'ip_address': request.META['REMOTE_ADDR'],
+            'username': username,
+        }
+    )
+
+
+def has_user_registration():
+    from sentry import features, options
+
+    return features.has('auth:register') and options.get('auth.allow-registration')
+
+
+def is_user_signed_request(request):
+    """
+    This function returns True if the request is a signed valid link
+    """
+    try:
+        return request.user_from_signed_request
+    except AttributeError:
+        return False
 
 
 class EmailAuthBackend(ModelBackend):
@@ -270,6 +283,7 @@ class EmailAuthBackend(ModelBackend):
 
     Supports authenticating via an email address or a username.
     """
+
     def authenticate(self, username=None, password=None):
         users = find_users(username)
         if users:

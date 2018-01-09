@@ -37,6 +37,8 @@ class EmailAuthBackendTest(TestCase):
 class GetLoginRedirectTest(TestCase):
     def make_request(self, next=None):
         request = HttpRequest()
+        request.META['SERVER_NAME'] = 'testserver'
+        request.META['SERVER_PORT'] = '80'
         request.session = {}
         request.user = self.user
         if next:
@@ -70,6 +72,7 @@ class LoginTest(TestCase):
         request = self.make_request()
         assert login(request, self.user)
         assert request.user == self.user
+        assert '_nonce' not in request.session
 
     def test_with_organization(self):
         org = self.create_organization(name='foo', owner=self.user)
@@ -77,3 +80,12 @@ class LoginTest(TestCase):
         assert login(request, self.user, organization_id=org.id)
         assert request.user == self.user
         assert request.session['sso'] == six.text_type(org.id)
+
+    def test_with_nonce(self):
+        self.user.refresh_session_nonce()
+        self.user.save()
+        assert self.user.session_nonce is not None
+        request = self.make_request()
+        assert login(request, self.user)
+        assert request.user == self.user
+        assert request.session['_nonce'] == self.user.session_nonce

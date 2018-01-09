@@ -7,7 +7,6 @@ sentry.web.forms.fields
 """
 from __future__ import absolute_import
 
-import ipaddress
 import six
 
 from django.core.validators import URLValidator
@@ -55,8 +54,11 @@ class RadioFieldRenderer(RadioFieldRenderer):
     we didn't have to create this stupid code, but Django widgets are not
     flexible.
     """
+
     def render(self):
-        return mark_safe(u'\n<div class="inputs-list">%s</div>\n' % u'\n'.join([force_text(w) for w in self]))
+        return mark_safe(
+            u'\n<div class="inputs-list">%s</div>\n' % u'\n'.join([force_text(w) for w in self])
+        )
 
 
 class UserField(CharField):
@@ -150,26 +152,3 @@ class OriginsField(CharField):
             return False
 
         return True
-
-
-class IPNetworksField(CharField):
-    widget = Textarea(
-        attrs={
-            'placeholder': mark_safe(_('e.g. 127.0.0.1 or 10.0.0.0/8')),
-            'class': 'span8',
-        },
-    )
-
-    def clean(self, value):
-        if not value:
-            return None
-        value = value.strip()
-        if not value:
-            return None
-        values = [v for v in (v.strip() for v in value.split('\n')) if v]
-        for value in values:
-            try:
-                ipaddress.ip_network(six.text_type(value))
-            except ValueError:
-                raise ValidationError('%r is not an acceptable value' % value)
-        return values

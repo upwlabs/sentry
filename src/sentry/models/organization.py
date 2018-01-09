@@ -7,7 +7,10 @@ sentry.models.organization
 """
 from __future__ import absolute_import, print_function
 
+import six
+
 from datetime import timedelta
+from enum import IntEnum
 
 from bitfield import BitField
 from django.conf import settings
@@ -15,24 +18,51 @@ from django.core.urlresolvers import reverse
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from django.utils.functional import cached_property
-from django.utils.translation import ugettext_lazy as _
 
 from sentry import roles
 from sentry.app import locks
 from sentry.constants import RESERVED_ORGANIZATION_SLUGS
-from sentry.db.models import (
-    BaseManager, BoundedPositiveIntegerField, Model, sane_repr
-)
+from sentry.db.models import (BaseManager, BoundedPositiveIntegerField, Model, sane_repr)
 from sentry.db.models.utils import slugify_instance
 from sentry.utils.http import absolute_uri
 from sentry.utils.retries import TimedRetryPolicy
+from sentry.models import Authenticator
 
 
-# TODO(dcramer): pull in enum library
-class OrganizationStatus(object):
-    VISIBLE = 0
+class OrganizationStatus(IntEnum):
+    ACTIVE = 0
     PENDING_DELETION = 1
     DELETION_IN_PROGRESS = 2
+
+    # alias
+    VISIBLE = 0
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def label(self):
+        return OrganizationStatus._labels[self]
+
+    @classmethod
+    def as_choices(cls):
+        result = []
+        for name, member in six.iteritems(cls.__members__):
+            # an alias
+            if name != member.name:
+                continue
+            # realistically Enum shouldn't even creating these, but alas
+            if name.startswith('_'):
+                continue
+            result.append((member, member.label))
+        return tuple(result)
+
+
+OrganizationStatus._labels = {
+    OrganizationStatus.ACTIVE: 'active',
+    OrganizationStatus.PENDING_DELETION: 'pending deletion',
+    OrganizationStatus.DELETION_IN_PROGRESS: 'deletion in progress',
+}
 
 
 class OrganizationManager(BaseManager):
@@ -50,21 +80,18 @@ class OrganizationManager(BaseManager):
 
         if settings.SENTRY_PUBLIC and scope is None:
             if only_visible:
-                return list(self.filter(status=OrganizationStatus.VISIBLE))
+                return list(self.filter(status=OrganizationStatus.ACTIVE))
             else:
                 return list(self.filter())
 
         qs = OrganizationMember.objects.filter(user=user).select_related('organization')
         if only_visible:
-            qs = qs.filter(organization__status=OrganizationStatus.VISIBLE)
+            qs = qs.filter(organization__status=OrganizationStatus.ACTIVE)
 
         results = list(qs)
 
         if scope is not None:
-            return [
-                r.organization for r in results
-                if scope in r.get_scopes()
-            ]
+            return [r.organization for r in results if scope in r.get_scopes()]
         return [r.organization for r in results]
 
 
@@ -76,30 +103,45 @@ class Organization(Model):
 
     name = models.CharField(max_length=64)
     slug = models.SlugField(unique=True)
-    status = BoundedPositiveIntegerField(choices=(
-        (OrganizationStatus.VISIBLE, _('Visible')),
-        (OrganizationStatus.PENDING_DELETION, _('Pending Deletion')),
-        (OrganizationStatus.DELETION_IN_PROGRESS, _('Deletion in Progress')),
-    ), default=OrganizationStatus.VISIBLE)
+    status = BoundedPositiveIntegerField(
+        choices=OrganizationStatus.as_choices(),
+        default=OrganizationStatus.ACTIVE
+    )
     date_added = models.DateTimeField(default=timezone.now)
-    members = models.ManyToManyField(settings.AUTH_USER_MODEL, through='sentry.OrganizationMember', related_name='org_memberships')
+    members = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        through='sentry.OrganizationMember',
+        related_name='org_memberships'
+    )
     default_role = models.CharField(
         choices=roles.get_choices(),
         max_length=32,
         default=roles.get_default().id,
     )
 
-    flags = BitField(flags=(
-        ('allow_joinleave', 'Allow members to join and leave teams without requiring approval.'),
-        ('enhanced_privacy', 'Enable enhanced privacy controls to limit personally identifiable information (PII) as well as source code in things like notifications.'),
-        ('disable_shared_issues', 'Disable sharing of limited details on issues to anonymous users.'),
-        ('early_adopter', 'Enable early adopter status, gaining access to features prior to public release.'),
-    ), default=1)
+    flags = BitField(
+        flags=(
+            (
+                'allow_joinleave',
+                'Allow members to join and leave teams without requiring approval.'
+            ), (
+                'enhanced_privacy',
+                'Enable enhanced privacy controls to limit personally identifiable information (PII) as well as source code in things like notifications.'
+            ), (
+                'disable_shared_issues',
+                'Disable sharing of limited details on issues to anonymous users.'
+            ), (
+                'early_adopter',
+                'Enable early adopter status, gaining access to features prior to public release.'
+            ), (
+                'require_2fa',
+                'Require and enforce two-factor authentication for all members.'
+            ),
+        ),
+        default=1
+    )
 
-    objects = OrganizationManager(cache_fields=(
-        'pk',
-        'slug',
-    ))
+    objects = OrganizationManager(cache_fields=('pk', 'slug', ))
 
     class Meta:
         app_label = 'sentry'
@@ -113,7 +155,7 @@ class Organization(Model):
         Return the organization used in single organization mode.
         """
         return cls.objects.filter(
-            status=OrganizationStatus.VISIBLE,
+            status=OrganizationStatus.ACTIVE,
         )[0]
 
     def __unicode__(self):
@@ -123,8 +165,7 @@ class Organization(Model):
         if not self.slug:
             lock = locks.get('slug:organization', duration=5)
             with TimedRetryPolicy(10)(lock.acquire):
-                slugify_instance(self, self.name,
-                                 reserved=RESERVED_ORGANIZATION_SLUGS)
+                slugify_instance(self, self.name, reserved=RESERVED_ORGANIZATION_SLUGS)
             super(Organization, self).save(*args, **kwargs)
         else:
             super(Organization, self).save(*args, **kwargs)
@@ -153,7 +194,7 @@ class Organization(Model):
             'id': self.id,
             'slug': self.slug,
             'name': self.name,
-            'status': self.status,
+            'status': int(self.status),
             'flags': self.flags,
             'default_role': self.default_role,
         }
@@ -183,11 +224,25 @@ class Organization(Model):
 
     def merge_to(from_org, to_org):
         from sentry.models import (
-            ApiKey, AuditLogEntry, OrganizationMember, OrganizationMemberTeam,
-            Project, Team
+            ApiKey,
+            AuditLogEntry,
+            Commit,
+            OrganizationMember,
+            OrganizationMemberTeam,
+            Project,
+            Release,
+            ReleaseCommit,
+            ReleaseEnvironment,
+            ReleaseFile,
+            ReleaseHeadCommit,
+            Repository,
+            Team,
+            Environment,
         )
 
-        for from_member in OrganizationMember.objects.filter(organization=from_org):
+        for from_member in OrganizationMember.objects.filter(
+            organization=from_org, user__isnull=False
+        ):
             try:
                 to_member = OrganizationMember.objects.get(
                     organization=to_org,
@@ -232,10 +287,31 @@ class Organization(Model):
                     slug=project.slug,
                 )
 
-        for model in (ApiKey, AuditLogEntry):
+        # TODO(jess): update this when adding unique constraint
+        # on version, organization for releases
+        for release in Release.objects.filter(organization=from_org):
+            try:
+                to_release = Release.objects.get(version=release.version, organization=to_org)
+            except Release.DoesNotExist:
+                Release.objects.filter(id=release.id).update(organization=to_org)
+            else:
+                Release.merge(to_release, [release])
+
+        for model in (ApiKey, AuditLogEntry, ReleaseFile):
             model.objects.filter(
                 organization=from_org,
             ).update(organization=to_org)
+
+        for model in (
+            Commit, ReleaseCommit, ReleaseEnvironment, ReleaseHeadCommit, Repository, Environment
+        ):
+            try:
+                with transaction.atomic():
+                    model.objects.filter(
+                        organization_id=from_org.id,
+                    ).update(organization_id=to_org.id)
+            except IntegrityError:
+                pass
 
     # TODO: Make these a mixin
     def update_option(self, *args, **kwargs):
@@ -270,9 +346,38 @@ class Organization(Model):
         }
 
         MessageBuilder(
-            subject='%sOrganization Queued for Deletion' % (options.get('mail.subject-prefix'),),
+            subject='%sOrganization Queued for Deletion' % (options.get('mail.subject-prefix'), ),
             template='sentry/emails/org_delete_confirm.txt',
             html_template='sentry/emails/org_delete_confirm.html',
             type='org.confirm_delete',
             context=context,
         ).send_async([o.email for o in owners])
+
+    def flag_has_changed(self, flag_name):
+        "Returns ``True`` if ``flag`` has changed since initialization."
+        return getattr(self.old_value('flags'), flag_name, None) != getattr(self.flags, flag_name)
+
+    def send_setup_2fa_emails(self):
+        from sentry import options
+        from sentry.utils.email import MessageBuilder
+        from sentry.models import User
+
+        for user in User.objects.filter(
+            is_active=True,
+            sentry_orgmember_set__organization=self,
+        ):
+            if not Authenticator.objects.user_has_2fa(user):
+                context = {
+                    'user': user,
+                    'url': absolute_uri(reverse('sentry-account-settings-2fa')),
+                    'organization': self
+                }
+                message = MessageBuilder(
+                    subject='%s %s Mandatory: Enable Two-Factor Authentication' % (
+                        options.get('mail.subject-prefix'), self.name),
+                    template='sentry/emails/setup_2fa.txt',
+                    html_template='sentry/emails/setup_2fa.html',
+                    type='user.setup_2fa',
+                    context=context,
+                )
+                message.send_async([user.email])

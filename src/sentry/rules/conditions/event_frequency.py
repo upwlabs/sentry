@@ -10,27 +10,32 @@ from __future__ import absolute_import
 
 from datetime import timedelta
 from django import forms
-
 from django.utils import timezone
+
+from sentry.tsdb import backend as tsdb
 from sentry.rules.conditions.base import EventCondition
 
-
-class Interval(object):
-    ONE_MINUTE = '1m'
-    ONE_HOUR = '1h'
-    ONE_DAY = '1d'
+intervals = {
+    '1m': ('one minute', timedelta(minutes=1)),
+    '1h': ('one hour', timedelta(hours=1)),
+    '1d': ('one day', timedelta(hours=24)),
+    '1w': ('one week', timedelta(days=7)),
+    '30d': ('30 days', timedelta(days=30)),
+}
 
 
 class EventFrequencyForm(forms.Form):
-    interval = forms.ChoiceField(choices=(
-        (Interval.ONE_MINUTE, 'one minute'),
-        (Interval.ONE_HOUR, 'one hour'),
-        (Interval.ONE_DAY, 'one day'),
-    ))
-    value = forms.IntegerField(widget=forms.TextInput(attrs={
-        'placeholder': '100',
-        'type': 'number'
-    }))
+    interval = forms.ChoiceField(
+        choices=[
+            (key, label)
+            for key, (label, duration
+                      ) in sorted(intervals.items(), key=lambda key____label__duration: key____label__duration[1][1])
+        ]
+    )
+    value = forms.IntegerField(
+        widget=forms.TextInput(attrs={'placeholder': '100',
+                                      'type': 'number'})
+    )
 
 
 class BaseEventFrequencyCondition(EventCondition):
@@ -38,8 +43,6 @@ class BaseEventFrequencyCondition(EventCondition):
     label = NotImplemented  # subclass must implement
 
     def __init__(self, *args, **kwargs):
-        from sentry.app import tsdb
-
         self.tsdb = kwargs.pop('tsdb', tsdb)
 
         super(BaseEventFrequencyCondition, self).__init__(*args, **kwargs)
@@ -64,19 +67,11 @@ class BaseEventFrequencyCondition(EventCondition):
         raise NotImplementedError  # subclass must implement
 
     def get_rate(self, event, interval):
+        _, duration = intervals[interval]
         end = timezone.now()
-        if interval == Interval.ONE_MINUTE:
-            start = end - timedelta(minutes=1)
-        elif interval == Interval.ONE_HOUR:
-            start = end - timedelta(hours=1)
-        elif interval == Interval.ONE_DAY:
-            start = end - timedelta(hours=24)
-        else:
-            raise ValueError(interval)
-
         return self.query(
             event,
-            start,
+            end - duration,
             end,
         )
 

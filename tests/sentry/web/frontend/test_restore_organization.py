@@ -9,7 +9,8 @@ from sentry.testutils import TestCase, PermissionTestCase
 class RestoreOrganizationPermissionTest(PermissionTestCase):
     def setUp(self):
         super(RestoreOrganizationPermissionTest, self).setUp()
-        self.organization = self.create_organization(name='foo', owner=self.user, status=OrganizationStatus.PENDING_DELETION)
+        self.organization = self.create_organization(
+            name='foo', owner=self.user, status=OrganizationStatus.PENDING_DELETION)
         self.path = reverse('sentry-restore-organization', args=[self.organization.slug])
 
     def test_teamless_admin_cannot_load(self):
@@ -26,7 +27,8 @@ class RemoveOrganizationTest(TestCase):
     def setUp(self):
         super(RemoveOrganizationTest, self).setUp()
 
-        self.organization = self.create_organization(name='foo', owner=self.user, status=OrganizationStatus.PENDING_DELETION)
+        self.organization = self.create_organization(
+            name='foo', owner=self.user, status=OrganizationStatus.PENDING_DELETION)
         self.team = self.create_team(organization=self.organization)
         self.path = reverse('sentry-restore-organization', args=[self.organization.slug])
 
@@ -64,7 +66,7 @@ class RemoveOrganizationTest(TestCase):
 
         assert org.status == OrganizationStatus.VISIBLE
 
-    def test_too_late(self):
+    def test_too_late_still_restores(self):
         Organization.objects.filter(
             id=self.organization.id,
         ).update(status=OrganizationStatus.DELETION_IN_PROGRESS)
@@ -75,4 +77,4 @@ class RemoveOrganizationTest(TestCase):
 
         org = Organization.objects.get(id=self.organization.id)
 
-        assert org.status == OrganizationStatus.DELETION_IN_PROGRESS
+        assert org.status == OrganizationStatus.VISIBLE

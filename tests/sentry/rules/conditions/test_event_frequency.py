@@ -7,11 +7,12 @@ from datetime import datetime, timedelta
 import mock
 import six
 
-from sentry.app import tsdb
+from sentry.tsdb import backend as tsdb
 from sentry.rules.conditions.event_frequency import (
-    EventFrequencyCondition, EventUniqueUserFrequencyCondition, Interval
+    EventFrequencyCondition, EventUniqueUserFrequencyCondition
 )
 from sentry.testutils.cases import RuleTestCase
+from six.moves import xrange
 
 
 class FrequencyConditionMixin(object):
@@ -25,7 +26,7 @@ class FrequencyConditionMixin(object):
         event = self.get_event()
         value = 10
         rule = self.get_rule({
-            'interval': Interval.ONE_MINUTE,
+            'interval': '1m',
             'value': six.text_type(value),
         })
 
@@ -50,7 +51,7 @@ class FrequencyConditionMixin(object):
         event = self.get_event()
         value = 10
         rule = self.get_rule({
-            'interval': Interval.ONE_HOUR,
+            'interval': '1h',
             'value': six.text_type(value),
         })
 
@@ -75,7 +76,7 @@ class FrequencyConditionMixin(object):
         event = self.get_event()
         value = 10
         rule = self.get_rule({
-            'interval': Interval.ONE_DAY,
+            'interval': '1d',
             'value': six.text_type(value),
         })
 
@@ -99,7 +100,7 @@ class FrequencyConditionMixin(object):
 
         event = self.get_event()
         rule = self.get_rule({
-            'interval': Interval.ONE_MINUTE,
+            'interval': '1m',
             'value': six.text_type('0'),
         })
 
@@ -125,7 +126,6 @@ class EventUniqueUserFrequencyConditionTestCase(FrequencyConditionMixin, RuleTes
     def increment(self, event, count, timestamp=None):
         tsdb.record(
             tsdb.models.users_affected_by_group,
-            event.group_id,
-            [next(self.sequence) for _ in xrange(0, count)],
+            event.group_id, [next(self.sequence) for _ in xrange(0, count)],
             timestamp=timestamp
         )

@@ -4,7 +4,15 @@ from sentry.interfaces.base import Interface
 from sentry.interfaces.stacktrace import Stacktrace
 from sentry.utils.safe import trim
 
-__all__ = ('Threads',)
+__all__ = ('Threads', )
+
+
+def get_stacktrace(value, raw=False):
+    # Special case: if the thread has no frames we set the
+    # stacktrace to none.  Otherwise this will fail really
+    # badly.
+    if value and value.get('frames'):
+        return Stacktrace.to_python(value, slim_frames=True, raw=raw)
 
 
 class Threads(Interface):
@@ -15,23 +23,16 @@ class Threads(Interface):
         threads = []
 
         for thread in data.get('values') or ():
-            stacktrace = thread.get('stacktrace')
-            if stacktrace is not None:
-                # Special case: if the thread has no frames we set the
-                # stacktrace to none.  Otherwise this will fail really
-                # badly.
-                if not stacktrace.get('frames'):
-                    stacktrace = None
-                else:
-                    stacktrace = Stacktrace.to_python(stacktrace,
-                                                      slim_frames=True)
-            threads.append({
-                'stacktrace': stacktrace,
-                'id': trim(thread.get('id'), 40),
-                'crashed': bool(thread.get('crashed')),
-                'current': bool(thread.get('current')),
-                'name': trim(thread.get('name'), 200),
-            })
+            threads.append(
+                {
+                    'stacktrace': get_stacktrace(thread.get('stacktrace')),
+                    'raw_stacktrace': get_stacktrace(thread.get('raw_stacktrace'), raw=True),
+                    'id': trim(thread.get('id'), 40),
+                    'crashed': bool(thread.get('crashed')),
+                    'current': bool(thread.get('current')),
+                    'name': trim(thread.get('name'), 200),
+                }
+            )
 
         return cls(values=threads)
 
@@ -46,6 +47,8 @@ class Threads(Interface):
             }
             if data['stacktrace']:
                 rv['stacktrace'] = data['stacktrace'].to_json()
+            if data['raw_stacktrace']:
+                rv['raw_stacktrace'] = data['raw_stacktrace'].to_json()
             return rv
 
         return {
@@ -60,10 +63,12 @@ class Threads(Interface):
                 'crashed': data['crashed'],
                 'name': data['name'],
                 'stacktrace': None,
+                'rawStacktrace': None,
             }
             if data['stacktrace']:
-                rv['stacktrace'] = data['stacktrace'].get_api_context(
-                    is_public=is_public)
+                rv['stacktrace'] = data['stacktrace'].get_api_context(is_public=is_public)
+            if data['raw_stacktrace']:
+                rv['rawStacktrace'] = data['raw_stacktrace'].get_api_context(is_public=is_public)
             return rv
 
         return {
@@ -72,3 +77,18 @@ class Threads(Interface):
 
     def get_path(self):
         return 'threads'
+
+    def get_hash(self):
+        if len(self.values) != 1:
+            return []
+        stacktrace = self.values[0].get('stacktrace')
+        if not stacktrace:
+            return []
+        system_hash = stacktrace.get_hash(system_frames=True)
+        if not system_hash:
+            return []
+        app_hash = stacktrace.get_hash(system_frames=False)
+        if system_hash == app_hash or not app_hash:
+            return [system_hash]
+
+        return [system_hash, app_hash]

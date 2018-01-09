@@ -1,16 +1,24 @@
+import PropTypes from 'prop-types';
 import React from 'react';
-import {History} from 'react-router';
+import createReactClass from 'create-react-class';
 import OrganizationState from '../mixins/organizationState';
 import {t} from '../locale';
 import requiredAdminActions from '../components/requiredAdminActions';
 import LoadingIndicator from '../components/loadingIndicator';
 
-const ActionOverlay = React.createClass({
+const ActionOverlay = createReactClass({
+  displayName: 'ActionOverlay',
+
   propTypes: {
-    actionId: React.PropTypes.string.isRequired,
-    isLoading: React.PropTypes.bool
+    actionId: PropTypes.string.isRequired,
+    isLoading: PropTypes.bool,
   },
-  mixins: [OrganizationState, History],
+
+  contextTypes: {
+    router: PropTypes.object.isRequired,
+  },
+
+  mixins: [OrganizationState],
 
   componentWillMount() {
     let action = this.getAction();
@@ -25,7 +33,7 @@ const ActionOverlay = React.createClass({
 
   dismiss() {
     // is this the right thing?
-    this.context.history.goBack();
+    this.context.router.goBack();
   },
 
   onDoThisLater(event) {
@@ -43,27 +51,27 @@ const ActionOverlay = React.createClass({
 
     return (
       <div className={className} {...other}>
-        <div className="pattern"/>
+        <div className="pattern" />
         <div className="container">
           <div className="dialog">
             <div className="dialog-contents">
               <div className="discard-bar">
-                <a href={orgUrl} onClick={this.onDoThisLater}>{
-                  t('Do this later …')}</a>
+                <a href={orgUrl} onClick={this.onDoThisLater}>
+                  {t('Do this later …')}
+                </a>
               </div>
-              <div className="content">
-                {children}
-              </div>
-              {isLoading ?
+              <div className="content">{children}</div>
+              {isLoading ? (
                 <div className="loading-overlay">
-                  <LoadingIndicator/>
-                </div> : null}
+                  <LoadingIndicator />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
       </div>
     );
-  }
+  },
 });
 
 export default ActionOverlay;

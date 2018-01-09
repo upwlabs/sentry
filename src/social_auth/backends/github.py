@@ -16,13 +16,7 @@ field, check OAuthBackend class for details on how to extend it.
 """
 from __future__ import absolute_import
 
-try:
-    import json as simplejson
-except ImportError:
-    try:
-        import simplejson
-    except ImportError:
-        from django.utils import simplejson
+import simplejson
 
 from django.conf import settings
 from six.moves.urllib.error import HTTPError
@@ -133,6 +127,7 @@ class GithubAuth(BaseOAuth2):
                     raise AuthFailed('User doesn\'t belong to the '
                                      'organization')
         return data
+
 
 # Backend definition
 BACKENDS = {

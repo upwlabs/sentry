@@ -51,9 +51,20 @@ class MailPlugin(NotificationPlugin):
             return self.subject_prefix
         return options.get('mail.subject-prefix')
 
-    def _build_message(self, project, subject, template=None, html_template=None,
-                   body=None, reference=None, reply_reference=None, headers=None,
-                   context=None, send_to=None, type=None):
+    def _build_message(
+        self,
+        project,
+        subject,
+        template=None,
+        html_template=None,
+        body=None,
+        reference=None,
+        reply_reference=None,
+        headers=None,
+        context=None,
+        send_to=None,
+        type=None
+    ):
         if send_to is None:
             send_to = self.get_send_to(project)
         if not send_to:
@@ -120,10 +131,13 @@ class MailPlugin(NotificationPlugin):
         return send_to_list
 
     def add_unsubscribe_link(self, context, user_id, project):
-        context['unsubscribe_link'] = generate_signed_link(user_id,
-            'sentry-account-email-unsubscribe-project', kwargs={
+        context['unsubscribe_link'] = generate_signed_link(
+            user_id,
+            'sentry-account-email-unsubscribe-project',
+            kwargs={
                 'project_id': project.id,
-            })
+            }
+        )
 
     def notify(self, notification):
         event = notification.event
@@ -140,9 +154,7 @@ class MailPlugin(NotificationPlugin):
 
         rules = []
         for rule in notification.rules:
-            rule_link = reverse('sentry-edit-project-rule', args=[
-                org.slug, project.slug, rule.id
-            ])
+            rule_link = reverse('sentry-edit-project-rule', args=[org.slug, project.slug, rule.id])
             rules.append((rule.label, rule_link))
 
         enhanced_privacy = org.flags.enhanced_privacy
@@ -165,9 +177,7 @@ class MailPlugin(NotificationPlugin):
                 if not body:
                     continue
                 text_body = interface.to_string(event)
-                interface_list.append(
-                    (interface.get_title(), mark_safe(body), text_body)
-                )
+                interface_list.append((interface.get_title(), mark_safe(body), text_body))
 
             context.update({
                 'tags': event.get_tags(),
@@ -177,8 +187,8 @@ class MailPlugin(NotificationPlugin):
         headers = {
             'X-Sentry-Logger': group.logger,
             'X-Sentry-Logger-Level': group.get_level_display(),
-            'X-Sentry-Team': project.team.name,
-            'X-Sentry-Project': project.name,
+            'X-Sentry-Team': project.team.slug,
+            'X-Sentry-Project': project.slug,
             'X-Sentry-Reply-To': group_id_to_email(group.id),
         }
 
@@ -215,7 +225,7 @@ class MailPlugin(NotificationPlugin):
             group = six.next(iter(counts))
             record = max(
                 itertools.chain.from_iterable(
-                    groups.get(group, []) for groups in six.itervalues(digest),
+                    groups.get(group, []) for groups in six.itervalues(digest)
                 ),
                 key=lambda record: record.timestamp,
             )
@@ -230,6 +240,11 @@ class MailPlugin(NotificationPlugin):
             'counts': counts,
         }
 
+        headers = {
+            'X-Sentry-Team': project.team.slug,
+            'X-Sentry-Project': project.slug,
+        }
+
         subject = self.get_digest_subject(project, counts, start)
 
         for user_id in self.get_send_to(project):
@@ -239,6 +254,8 @@ class MailPlugin(NotificationPlugin):
                 template='sentry/emails/digests/body.txt',
                 html_template='sentry/emails/digests/body.html',
                 project=project,
+                reference=project,
+                headers=headers,
                 type='notify.digest',
                 context=context,
                 send_to=[user_id],
@@ -247,13 +264,91 @@ class MailPlugin(NotificationPlugin):
     def notify_about_activity(self, activity):
         email_cls = emails.get(activity.type)
         if not email_cls:
-            logger.debug('No email associated with activity type `{}`'.format(
-                activity.get_type_display(),
-            ))
+            logger.debug(
+                'No email associated with activity type `{}`'.format(
+                    activity.get_type_display(),
+                )
+            )
             return
 
         email = email_cls(activity)
         email.send()
+
+    def handle_user_report(self, payload, project, **kwargs):
+        from sentry.models import Group, GroupSubscription, GroupSubscriptionReason
+
+        group = Group.objects.get(id=payload['report']['issue']['id'])
+
+        participants = GroupSubscription.objects.get_participants(group=group)
+
+        if not participants:
+            return
+
+        context = {
+            'project': project,
+            'project_link': absolute_uri('/{}/{}/'.format(
+                project.organization.slug,
+                project.slug,
+            )),
+            'issue_link': absolute_uri('/{}/{}/issues/{}/'.format(
+                project.organization.slug,
+                project.slug,
+                payload['report']['issue']['id'],
+            )),
+            # TODO(dcramer): we dont have permalinks to feedback yet
+            'link': absolute_uri('/{}/{}/issues/{}/feedback/'.format(
+                project.organization.slug,
+                project.slug,
+                payload['report']['issue']['id'],
+            )),
+            'group': group,
+            'report': payload['report'],
+        }
+
+        subject_prefix = self.get_option('subject_prefix', project) or self._subject_prefix()
+        subject_prefix = force_text(subject_prefix)
+        subject = force_text(u'{}{} - New Feedback from {}'.format(
+            subject_prefix,
+            group.qualified_short_id,
+            payload['report']['name'],
+        ))
+
+        headers = {
+            'X-Sentry-Team': project.team.slug,
+            'X-Sentry-Project': project.slug,
+        }
+
+        # TODO(dcramer): this is copypasta'd from activity notifications
+        # and while it'd be nice to re-use all of that, they are currently
+        # coupled to <Activity> instances which makes this tough
+        for user, reason in participants.items():
+            context.update({
+                'reason': GroupSubscriptionReason.descriptions.get(
+                    reason,
+                    "are subscribed to this issue",
+                ),
+                'unsubscribe_link': generate_signed_link(
+                    user.id,
+                    'sentry-account-email-unsubscribe-issue',
+                    kwargs={'issue_id': group.id},
+                ),
+            })
+
+            msg = MessageBuilder(
+                subject=subject,
+                template='sentry/emails/activity/new-user-feedback.txt',
+                html_template='sentry/emails/activity/new-user-feedback.html',
+                headers=headers,
+                type='notify.user-report',
+                context=context,
+                reference=group,
+            )
+            msg.add_users([user.id], project=project)
+            msg.send_async()
+
+    def handle_signal(self, name, payload, **kwargs):
+        if name == 'user-reports.created':
+            self.handle_user_report(payload, **kwargs)
 
 
 # Legacy compatibility

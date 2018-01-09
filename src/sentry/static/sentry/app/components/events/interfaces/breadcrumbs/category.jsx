@@ -1,11 +1,12 @@
+import PropTypes from 'prop-types';
 import React from 'react';
 
-const Category = React.createClass({
-  propTypes: {
-    value: React.PropTypes.string.isRequired,
-    title: React.PropTypes.string,
-    hideIfEmpty: React.PropTypes.bool
-  },
+class Category extends React.Component {
+  static propTypes = {
+    value: PropTypes.string,
+    title: PropTypes.string,
+    hideIfEmpty: PropTypes.bool,
+  };
 
   render() {
     let value = this.props.value;
@@ -22,9 +23,11 @@ const Category = React.createClass({
       title = value;
     }
     return (
-      <span className="crumb-category" title={title}>{title}</span>
+      <span className="crumb-category" title={title}>
+        {title}
+      </span>
     );
   }
-});
+}
 
 export default Category;

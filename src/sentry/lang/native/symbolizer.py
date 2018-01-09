@@ -1,142 +1,276 @@
 from __future__ import absolute_import
 
+import re
 import six
 
-from symsynd.driver import Driver, SymbolicationError
-from symsynd.report import ReportSymbolizer
-from symsynd.macho.arch import get_cpu_name
-from symsynd.demangle import demangle_symbol
+from symbolic import SymbolicError, ObjectLookup, LineInfo, parse_addr
 
-from sentry.lang.native.dsymcache import dsymcache
 from sentry.utils.safe import trim
-from sentry.models import DSymSymbol, EventError
-from sentry.constants import MAX_SYM
+from sentry.utils.compat import implements_to_string
+from sentry.models import EventError, ProjectDSymFile
+from sentry.lang.native.utils import rebase_addr
+from sentry.constants import MAX_SYM, NATIVE_UNKNOWN_STRING
 
-
-def trim_frame(frame):
-    # This matches what's in stacktrace.py
-    frame['symbol_name'] = trim(frame.get('symbol_name'), MAX_SYM)
-    frame['filename'] = trim(frame.get('filename'), 256)
-    return frame
-
-
-def find_system_symbol(img, instruction_addr, sdk_info=None):
-    """Finds a system symbol."""
-    return DSymSymbol.objects.lookup_symbol(
-        instruction_addr=instruction_addr,
-        image_addr=img['image_addr'],
-        image_vmaddr=img['image_vmaddr'],
-        uuid=img['uuid'],
-        cpu_name=get_cpu_name(img['cpu_type'],
-                              img['cpu_subtype']),
-        object_path=img['name'],
-        sdk_info=sdk_info
+FATAL_ERRORS = (EventError.NATIVE_MISSING_DSYM, EventError.NATIVE_BAD_DSYM, )
+USER_FIXABLE_ERRORS = (
+    EventError.NATIVE_MISSING_DSYM, EventError.NATIVE_MISSING_OPTIONALLY_BUNDLED_DSYM,
+    EventError.NATIVE_BAD_DSYM, EventError.NATIVE_MISSING_SYMBOL,
+)
+APP_BUNDLE_PATHS = (
+    '/var/containers/Bundle/Application/', '/private/var/containers/Bundle/Application/',
+)
+_sim_platform_re = re.compile(r'/\w+?Simulator\.platform/')
+_support_framework = re.compile(
+    r'''(?x)
+    /Frameworks/(
+            libswift([a-zA-Z0-9]+)\.dylib$
+        |   (KSCrash|SentrySwift|Sentry)\.framework/
     )
+'''
+)
+SIM_PATH = '/Developer/CoreSimulator/Devices/'
+SIM_APP_PATH = '/Containers/Bundle/Application/'
+MAC_OS_PATH = '.app/Contents/'
+
+_internal_function_re = re.compile(
+    r'(kscm_|kscrash_|KSCrash |SentryClient |RNSentry )')
+
+KNOWN_GARBAGE_SYMBOLS = set([
+    '_mh_execute_header',
+    '<redacted>',
+    NATIVE_UNKNOWN_STRING,
+])
 
 
-def make_symbolizer(project, binary_images, referenced_images=None):
-    """Creates a symbolizer for the given project and binary images.  If a
-    list of referenced images is referenced (UUIDs) then only images
-    needed by those frames are loaded.
-    """
-    driver = Driver()
+@implements_to_string
+class SymbolicationFailed(Exception):
+    message = None
 
-    to_load = referenced_images
-    if to_load is None:
-        to_load = [x['uuid'] for x in binary_images]
+    def __init__(self, message=None, type=None, obj=None):
+        Exception.__init__(self)
+        self.message = six.text_type(message)
+        self.type = type
+        self.image_name = None
+        self.image_path = None
+        if obj is not None:
+            self.image_uuid = six.text_type(obj.uuid)
+            if obj.name:
+                self.image_path = obj.name
+                self.image_name = obj.name.rsplit('/', 1)[-1]
+            self.image_arch = obj.arch
+        else:
+            self.image_uuid = None
+            self.image_arch = None
 
-    dsym_paths, loaded = dsymcache.fetch_dsyms(project, to_load)
+    @property
+    def is_user_fixable(self):
+        """These are errors that a user can fix themselves."""
+        return self.type in USER_FIXABLE_ERRORS
 
-    # We only want to pass the actually loaded symbols to the report
-    # symbolizer to avoid the expensive FS operations that will otherwise
-    # happen.
-    user_images = []
-    for img in binary_images:
-        if img['uuid'] in loaded:
-            user_images.append(img)
+    @property
+    def is_fatal(self):
+        """If this is true then a processing issues has to be reported."""
+        return self.type in FATAL_ERRORS
 
-    return ReportSymbolizer(driver, dsym_paths, user_images)
+    @property
+    def is_sdk_failure(self):
+        """An error that most likely happened because of a bad SDK."""
+        return self.type == EventError.NATIVE_UNKNOWN_IMAGE
+
+    def get_data(self):
+        """Returns the event data."""
+        rv = {'message': self.message}
+        if self.image_path is not None:
+            rv['image_path'] = self.image_path
+        if self.image_uuid is not None:
+            rv['image_uuid'] = self.image_uuid
+        if self.image_arch is not None:
+            rv['image_arch'] = self.image_arch
+        return rv
+
+    def __str__(self):
+        rv = []
+        if self.type is not None:
+            rv.append(u'%s: ' % self.type)
+        rv.append(self.message or 'no information available')
+        if self.image_uuid is not None:
+            rv.append(' image-uuid=%s' % self.image_uuid)
+        if self.image_name is not None:
+            rv.append(' image-name=%s' % self.image_name)
+        return u''.join(rv)
 
 
 class Symbolizer(object):
+    """This symbolizer dispatches to both symbolic and the system symbols
+    we have in the database and reports errors slightly differently.
+    """
 
-    def __init__(self, project, binary_images, referenced_images=None):
-        self.symsynd_symbolizer = make_symbolizer(
-            project, binary_images, referenced_images=referenced_images)
-        self.images = dict((img['image_addr'], img) for img in binary_images)
+    def __init__(self, project, object_lookup, referenced_images,
+                 on_dsym_file_referenced=None):
+        if not isinstance(object_lookup, ObjectLookup):
+            object_lookup = ObjectLookup(object_lookup)
+        self.object_lookup = object_lookup
 
-    def __enter__(self):
-        return self.symsynd_symbolizer.driver.__enter__()
+        self.symcaches, self.symcaches_conversion_errors = \
+            ProjectDSymFile.dsymcache.get_symcaches(
+                project, referenced_images,
+                on_dsym_file_referenced=on_dsym_file_referenced,
+                with_conversion_errors=True)
 
-    def __exit__(self, *args):
-        return self.symsynd_symbolizer.driver.__exit__(*args)
+    def _process_frame(self, sym, obj, package=None, addr_off=0):
+        frame = {
+            'sym_addr': sym.sym_addr + addr_off,
+            'instruction_addr': sym.instr_addr + addr_off,
+            'lineno': sym.line,
+        }
+        symbol = trim(sym.symbol, MAX_SYM)
+        function = trim(sym.function_name, MAX_SYM)
 
-    def _process_frame(self, frame, img):
-        rv = trim_frame(frame)
-        if img is not None:
-            # Only set the object name if we "upgrade" it from a filename to
-            # full path.
-            if rv.get('object_name') is None or \
-               ('/' not in rv['object_name'] and '/' in img['name']):
-                rv['object_name'] = img['name']
-            rv['uuid'] = img['uuid']
-        return rv
+        frame['function'] = function
+        if function != symbol:
+            frame['symbol'] = symbol
+        else:
+            frame['symbol'] = None
 
-    def symbolize_app_frame(self, frame):
-        img = self.images.get(frame['object_addr'])
-        new_frame = self.symsynd_symbolizer.symbolize_frame(
-            frame, silent=False)
-        if new_frame is not None:
-            return self._process_frame(new_frame, img)
+        frame['filename'] = trim(sym.rel_path, 256)
+        frame['abs_path'] = trim(sym.abs_path, 256)
+        if package is not None:
+            frame['package'] = package
 
-    def symbolize_system_frame(self, frame, sdk_info):
-        img = self.images.get(frame['object_addr'])
-        if img is None:
-            return
+        return frame
 
-        symbol = find_system_symbol(img, frame['instruction_addr'],
-                                    sdk_info)
-        if symbol is None:
-            return
+    def is_image_from_app_bundle(self, obj, sdk_info=None):
+        fn = obj.name
+        if not fn:
+            return False
+        is_mac_platform = (
+            sdk_info is not None and sdk_info['sdk_name'].lower() == 'macos')
+        if not (
+            fn.startswith(APP_BUNDLE_PATHS) or (SIM_PATH in fn and SIM_APP_PATH in fn) or
+            (is_mac_platform and MAC_OS_PATH in fn)
+        ):
+            return False
+        return True
 
-        symbol = demangle_symbol(symbol) or symbol
-        rv = dict(frame, symbol_name=symbol, filename=None,
-                  line=0, column=0, uuid=img['uuid'],
-                  object_name=img['name'])
-        return self._process_frame(rv, img)
+    def _is_support_framework(self, obj):
+        """True if the frame is from a framework that is known and app
+        bundled.  Those are frameworks which are specifically not frameworks
+        that are ever in_app.
+        """
+        return obj.name and _support_framework.search(obj.name) is not None
 
-    def symbolize_frame(self, frame, sdk_info=None, report_error=None):
-        # Step one: try to symbolize with cached dsym files.
-        try:
-            rv = self.symbolize_app_frame(frame)
-            if rv is not None:
-                return rv
-        except SymbolicationError as e:
-            if report_error is not None:
-                report_error(e)
+    def _is_app_bundled_framework(self, obj):
+        fn = obj.name
+        return fn and fn.startswith(APP_BUNDLE_PATHS) and '/Frameworks/' in fn
 
-        # If that does not work, look up system symbols.
-        rv = self.symbolize_system_frame(frame, sdk_info)
-        if rv is not None:
-            return rv
+    def _is_app_frame(self, instruction_addr, obj, sdk_info=None):
+        """Given a frame derives the value of `in_app` by discarding the
+        original value of the frame.
+        """
+        # Anything that is outside the app bundle is definitely not a
+        # frame from out app.
+        if not self.is_image_from_app_bundle(obj, sdk_info=sdk_info):
+            return False
 
-    def symbolize_backtrace(self, backtrace, sdk_info=None):
-        rv = []
-        errors = []
-        idx = -1
+        # We also do not consider known support frameworks to be part of
+        # the app
+        if self._is_support_framework(obj):
+            return False
 
-        def report_error(e):
-            errors.append({
-                'type': EventError.NATIVE_INTERNAL_FAILURE,
-                'frame': frm,
-                'error': 'frame #%d: %s: %s' % (
-                    idx,
-                    e.__class__.__name__,
-                    six.text_type(e),
+        # Otherwise, yeah, let's just say it's in_app
+        return True
+
+    def _is_optional_dsym(self, obj, sdk_info=None):
+        """Checks if this is a dsym that is optional."""
+        # Frames that are not in the app are not considered optional.  In
+        # theory we should never reach this anyways.
+        if not self.is_image_from_app_bundle(obj, sdk_info=sdk_info):
+            return False
+
+        # If we're dealing with an app bundled framework that is also
+        # considered optional.
+        if self._is_app_bundled_framework(obj):
+            return True
+
+        # Frameworks that are known to sentry and bundled helpers are always
+        # optional for now.  In theory this should always be False here
+        # because we should catch it with the last branch already.
+        if self._is_support_framework(obj):
+            return True
+
+        return False
+
+    def _is_simulator_frame(self, frame, obj):
+        return obj.name and _sim_platform_re.search(obj.name) is not None
+
+    def _symbolize_app_frame(self, instruction_addr, obj, sdk_info=None):
+        symcache = self.symcaches.get(obj.uuid)
+        if symcache is None:
+            # In case we know what error happened on symcache conversion
+            # we can report it to the user now.
+            if obj.uuid in self.symcaches_conversion_errors:
+                raise SymbolicationFailed(
+                    message=self.symcaches_conversion_errors[obj.uuid],
+                    type=EventError.NATIVE_BAD_DSYM,
+                    obj=obj
                 )
-            })
+            if self._is_optional_dsym(obj, sdk_info=sdk_info):
+                type = EventError.NATIVE_MISSING_OPTIONALLY_BUNDLED_DSYM
+            else:
+                type = EventError.NATIVE_MISSING_DSYM
+            raise SymbolicationFailed(type=type, obj=obj)
 
-        for idx, frm in enumerate(backtrace):
-            rv.append(self.symbolize_frame(
-                frm, sdk_info, report_error=report_error) or frm)
-        return rv, errors
+        try:
+            rv = symcache.lookup(rebase_addr(instruction_addr, obj))
+        except SymbolicError as e:
+            raise SymbolicationFailed(
+                type=EventError.NATIVE_BAD_DSYM, message=six.text_type(e), obj=obj
+            )
+
+        if not rv:
+            # For some frameworks we are willing to ignore missing symbol
+            # errors.
+            if self._is_optional_dsym(obj, sdk_info=sdk_info):
+                return []
+            raise SymbolicationFailed(
+                type=EventError.NATIVE_MISSING_SYMBOL, obj=obj)
+        return [self._process_frame(s, obj, addr_off=obj.addr) for s in reversed(rv)]
+
+    def _convert_symbolserver_match(self, instruction_addr, symbolserver_match, obj):
+        """Symbolizes a frame with system symbols only."""
+        if symbolserver_match is None:
+            return []
+
+        symbol = symbolserver_match['symbol']
+        if symbol[:1] == '_':
+            symbol = symbol[1:]
+
+        return [
+            self._process_frame(LineInfo(
+                sym_addr=parse_addr(symbolserver_match['addr']),
+                instr_addr=parse_addr(instruction_addr),
+                line=None,
+                lang=None,
+                symbol=symbol,
+            ), obj, package=symbolserver_match['object_name'])
+        ]
+
+    def symbolize_frame(self, instruction_addr, sdk_info=None, symbolserver_match=None):
+        obj = self.object_lookup.find_object(instruction_addr)
+        if obj is None:
+            raise SymbolicationFailed(type=EventError.NATIVE_UNKNOWN_IMAGE)
+
+        # If we are dealing with a frame that is not bundled with the app
+        # we look at system symbols.  If that fails, we go to looking for
+        # app symbols explicitly.
+        if not self.is_image_from_app_bundle(obj, sdk_info=sdk_info):
+            return self._convert_symbolserver_match(instruction_addr, symbolserver_match, obj)
+
+        return self._symbolize_app_frame(instruction_addr, obj, sdk_info=sdk_info)
+
+    def is_in_app(self, instruction_addr, sdk_info=None):
+        obj = self.object_lookup.find_object(instruction_addr)
+        return obj is not None and self._is_app_frame(instruction_addr, obj, sdk_info=sdk_info)
+
+    def is_internal_function(self, function):
+        return _internal_function_re.search(function) is not None

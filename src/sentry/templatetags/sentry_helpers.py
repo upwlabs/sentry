@@ -16,40 +16,40 @@ import pytz
 import six
 from django import template
 from django.conf import settings
-from django.core.urlresolvers import reverse
 from django.template.defaultfilters import stringfilter
 from django.utils import timezone
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext as _
 from pkg_resources import parse_version as Version
-from templatetag_sugar.parser import Constant, Name, Optional, Variable
+from templatetag_sugar.parser import Constant, Name, Variable
 from templatetag_sugar.register import tag
 
 from sentry import options
 from sentry.api.serializers import serialize as serialize_func
-from sentry.models import Organization, UserAvatar
+from sentry.models import Organization
 from sentry.utils import json
-from sentry.utils.avatar import (
-    get_email_avatar, get_gravatar_url, get_letter_avatar
-)
-from sentry.utils.javascript import to_json
 from sentry.utils.strings import soft_break as _soft_break
 from sentry.utils.strings import soft_hyphenate, to_unicode, truncatechars
 from six.moves import range
-from six.moves.urllib.parse import quote, urlencode, urlparse
+from six.moves.urllib.parse import quote
 
 SentryVersion = namedtuple('SentryVersion', [
-    'current', 'latest', 'update_available', 'build',
+    'current',
+    'latest',
+    'update_available',
+    'build',
 ])
-
 
 register = template.Library()
 
 truncatechars = register.filter(stringfilter(truncatechars))
 truncatechars.is_safe = True
 
-register.filter(to_json)
+
+@register.filter
+def to_json(obj, request=None):
+    return json.dumps_htmlsafe(obj)
 
 
 @register.filter
@@ -61,6 +61,7 @@ def multiply(x, y):
             return int(value)
         except ValueError:
             return float(value)
+
     return coerce(x) * coerce(y)
 
 
@@ -72,9 +73,13 @@ def absolute_uri(path='', *args):
 
 @register.simple_tag
 def system_origin():
-    from sentry.utils.http import absolute_uri
-    url = urlparse(absolute_uri())
-    return '%s://%s' % (url.scheme, url.netloc)
+    from sentry.utils.http import absolute_uri, origin_from_url
+    return origin_from_url(absolute_uri())
+
+
+@register.simple_tag
+def security_contact():
+    return options.get('system.security-email') or options.get('system.admin-email')
 
 
 @register.filter
@@ -85,9 +90,10 @@ def pprint(value, break_after=10):
     """
 
     value = to_unicode(value)
-    return mark_safe(u'<span></span>'.join(
-        [escape(value[i:(i + break_after)]) for i in range(0, len(value), break_after)]
-    ))
+    return mark_safe(
+        u'<span></span>'.
+        join([escape(value[i:(i + break_after)]) for i in range(0, len(value), break_after)])
+    )
 
 
 @register.filter
@@ -176,9 +182,7 @@ def get_sentry_version(context):
     update_available = Version(latest) > Version(current)
     build = sentry.__build__ or current
 
-    context['sentry_version'] = SentryVersion(
-        current, latest, update_available, build
-    )
+    context['sentry_version'] = SentryVersion(current, latest, update_available, build)
     return ''
 
 
@@ -196,7 +200,7 @@ def timesince(value, now=None):
         return _('just now')
     if value == _('1 day'):
         return _('yesterday')
-    return value + _(' ago')
+    return _('%s ago') % value
 
 
 @register.filter
@@ -233,9 +237,16 @@ def date(dt, arg=None):
     return date(dt, arg)
 
 
-@tag(register, [Constant('for'), Variable('user'),
-                Constant('from'), Variable('project'),
-                Constant('as'), Name('asvar')])
+@tag(
+    register, [
+        Constant('for'),
+        Variable('user'),
+        Constant('from'),
+        Variable('project'),
+        Constant('as'),
+        Name('asvar')
+    ]
+)
 def get_project_dsn(context, user, project, asvar):
     from sentry.models import ProjectKey
 
@@ -253,46 +264,6 @@ def get_project_dsn(context, user, project, asvar):
     return ''
 
 
-# Adapted from http://en.gravatar.com/site/implement/images/django/
-# The "mm" default is for the grey, "mystery man" icon. See:
-#   http://en.gravatar.com/site/implement/images/
-@tag(register, [Variable('email'),
-                Optional([Constant('size'), Variable('size')]),
-                Optional([Constant('default'), Variable('default')])])
-def gravatar_url(context, email, size=None, default='mm'):
-    return get_gravatar_url(email, size, default)
-
-
-@tag(register, [Variable('display_name'),
-                Variable('identifier'),
-                Optional([Constant('size'), Variable('size')])])
-def letter_avatar_svg(context, display_name, identifier, size=None):
-    return get_letter_avatar(display_name, identifier, size=size)
-
-
-@tag(register, [Variable('user_id'),
-                Optional([Constant('size'), Variable('size')])])
-def profile_photo_url(context, user_id, size=None):
-    try:
-        avatar = UserAvatar.objects.get(user__id=user_id)
-    except UserAvatar.DoesNotExist:
-        return
-    url = reverse('sentry-user-avatar-url', args=[avatar.ident])
-    if size:
-        url += '?' + urlencode({'s': size})
-    return settings.SENTRY_URL_PREFIX + url
-
-
-# Don't use this in any situations where you're rendering more
-# than 1-2 avatars. It will make a request for every user!
-@tag(register, [Variable('display_name'),
-                Variable('identifier'),
-                Optional([Constant('size'), Variable('size')]),
-                Optional([Constant('try_gravatar'), Variable('try_gravatar')])])
-def email_avatar(context, display_name, identifier, size=None, try_gravatar=True):
-    return get_email_avatar(display_name, identifier, size, try_gravatar)
-
-
 @register.filter
 def trim_schema(value):
     return value.split('//', 1)[-1]
@@ -303,10 +274,12 @@ def with_metadata(group_list, request):
     group_list = list(group_list)
     if request.user.is_authenticated() and group_list:
         project = group_list[0].project
-        bookmarks = set(project.bookmark_set.filter(
-            user=request.user,
-            group__in=group_list,
-        ).values_list('group_id', flat=True))
+        bookmarks = set(
+            project.bookmark_set.filter(
+                user=request.user,
+                group__in=group_list,
+            ).values_list('group_id', flat=True)
+        )
     else:
         bookmarks = set()
 
@@ -399,10 +372,7 @@ def format_userinfo(user):
         username = user.username
     else:
         username = parts[0].lower()
-    return mark_safe('<span title="%s">%s</span>' % (
-        escape(user.username),
-        escape(username),
-    ))
+    return mark_safe('<span title="%s">%s</span>' % (escape(user.username), escape(username), ))
 
 
 @register.filter

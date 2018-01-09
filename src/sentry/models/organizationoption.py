@@ -12,7 +12,7 @@ from django.core.signals import request_finished
 from django.db import models
 
 from sentry.db.models import Model, FlexibleForeignKey, sane_repr
-from sentry.db.models.fields import UnicodePickledObjectField
+from sentry.db.models.fields import EncryptedPickledObjectField
 from sentry.db.models.manager import BaseManager
 from sentry.utils.cache import cache
 
@@ -52,7 +52,11 @@ class OrganizationOptionManager(BaseManager):
         return result.get(key, default)
 
     def unset_value(self, organization, key):
-        self.filter(organization=organization, key=key).delete()
+        try:
+            inst = self.get(organization=organization, key=key)
+        except self.model.DoesNotExist:
+            return
+        inst.delete()
         self.reload_cache(organization.id)
 
     def set_value(self, organization, key, value):
@@ -85,10 +89,7 @@ class OrganizationOptionManager(BaseManager):
 
     def reload_cache(self, organization_id):
         cache_key = self._make_key(organization_id)
-        result = dict(
-            (i.key, i.value)
-            for i in self.filter(organization=organization_id)
-        )
+        result = dict((i.key, i.value) for i in self.filter(organization=organization_id))
         cache.set(cache_key, result)
         self.__cache[organization_id] = result
         return result
@@ -119,13 +120,13 @@ class OrganizationOption(Model):
 
     organization = FlexibleForeignKey('sentry.Organization')
     key = models.CharField(max_length=64)
-    value = UnicodePickledObjectField()
+    value = EncryptedPickledObjectField()
 
     objects = OrganizationOptionManager()
 
     class Meta:
         app_label = 'sentry'
         db_table = 'sentry_organizationoptions'
-        unique_together = (('organization', 'key',),)
+        unique_together = (('organization', 'key', ), )
 
     __repr__ = sane_repr('organization_id', 'key', 'value')

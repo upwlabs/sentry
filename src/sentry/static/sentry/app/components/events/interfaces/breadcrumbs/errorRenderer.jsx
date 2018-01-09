@@ -1,21 +1,17 @@
+import PropTypes from 'prop-types';
 import React from 'react';
 
 import CrumbTable from './crumbTable';
 import SummaryLine from './summaryLine';
 
+class ErrorRenderer extends React.Component {
+  static propTypes = {
+    crumb: PropTypes.object.isRequired,
+  };
 
-const ErrorRenderer = React.createClass({
-  propTypes: {
-    crumb: React.PropTypes.object.isRequired,
-  },
-
-  renderUrl(url) {
-    return (
-      url.match(/^https?:\/\//)
-        ? <a href={url}>{url}</a>
-        : <em>{url}</em>
-    );
-  },
+  renderUrl = url => {
+    return url.match(/^https?:\/\//) ? <a href={url}>{url}</a> : <em>{url}</em>;
+  };
 
   render() {
     let {crumb} = this.props;
@@ -40,14 +36,8 @@ const ErrorRenderer = React.createClass({
       </SummaryLine>
     );
 
-    return (
-      <CrumbTable
-        title="Error"
-        summary={summary}
-        kvData={extra}
-        {...this.props} />
-    );
+    return <CrumbTable title="Error" summary={summary} kvData={extra} {...this.props} />;
   }
-});
+}
 
 export default ErrorRenderer;

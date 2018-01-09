@@ -8,9 +8,11 @@ sentry.db.models
 
 from __future__ import absolute_import
 
+from copy import copy
 import logging
 import six
 
+from bitfield.types import BitHandler
 from django.db import models
 from django.db.models import signals
 
@@ -25,14 +27,12 @@ UNSAVED = object()
 
 def sane_repr(*attrs):
     if 'id' not in attrs and 'pk' not in attrs:
-        attrs = ('id',) + attrs
+        attrs = ('id', ) + attrs
 
     def _repr(self):
         cls = type(self).__name__
 
-        pairs = (
-            '%s=%s' % (a, repr(getattr(self, a, None)))
-            for a in attrs)
+        pairs = ('%s=%s' % (a, repr(getattr(self, a, None))) for a in attrs)
 
         return u'<%s at 0x%x: %s>' % (cls, id(self), ', '.join(pairs))
 
@@ -76,10 +76,14 @@ class BaseModel(models.Model):
             data = {}
             for f in self._meta.fields:
                 try:
-                    data[f.column] = self.__get_field_value(f)
+                    v = self.__get_field_value(f)
                 except AttributeError as e:
                     # this case can come up from pickling
                     logging.exception(six.text_type(e))
+                else:
+                    if isinstance(v, BitHandler):
+                        v = copy(v)
+                    data[f.column] = v
             self.__data = data
         else:
             self.__data = UNSAVED

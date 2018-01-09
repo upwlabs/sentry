@@ -4,9 +4,7 @@ from django.utils import timezone
 from rest_framework.response import Response
 
 from sentry.api.bases.organization import OrganizationEndpoint
-from sentry.models import (
-    OnboardingTask, OnboardingTaskStatus, OrganizationOnboardingTask
-)
+from sentry.models import (OnboardingTask, OnboardingTaskStatus, OrganizationOnboardingTask)
 from sentry.receivers import check_for_onboarding_complete
 
 
@@ -18,13 +16,9 @@ class OrganizationOnboardingTaskEndpoint(OrganizationEndpoint):
             return Response(status=500)
 
         if request.DATA['status'] == 'skipped' and task_id in (
-            OnboardingTask.INVITE_MEMBER,
-            OnboardingTask.SECOND_PLATFORM,
-            OnboardingTask.USER_CONTEXT,
-            OnboardingTask.RELEASE_TRACKING,
-            OnboardingTask.SOURCEMAPS,
-            OnboardingTask.USER_REPORTS,
-            OnboardingTask.ISSUE_TRACKER,
+            OnboardingTask.INVITE_MEMBER, OnboardingTask.SECOND_PLATFORM,
+            OnboardingTask.USER_CONTEXT, OnboardingTask.RELEASE_TRACKING, OnboardingTask.SOURCEMAPS,
+            OnboardingTask.USER_REPORTS, OnboardingTask.ISSUE_TRACKER,
             OnboardingTask.NOTIFICATION_SERVICE
         ):
             rows_affected, created = OrganizationOnboardingTask.objects.create_or_update(
@@ -37,7 +31,7 @@ class OrganizationOnboardingTaskEndpoint(OrganizationEndpoint):
                 }
             )
             if rows_affected or created:
-                check_for_onboarding_complete(organization)
+                check_for_onboarding_complete(organization.id)
             return Response(status=204)
 
         return Response(status=404)

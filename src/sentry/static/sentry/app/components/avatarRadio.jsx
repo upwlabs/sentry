@@ -1,18 +1,22 @@
+import PropTypes from 'prop-types';
 import React from 'react';
+
+import createReactClass from 'create-react-class';
 
 import {t} from '../locale';
 
+const AvatarRadio = createReactClass({
+  displayName: 'AvatarRadio',
 
-const AvatarRadio = React.createClass({
   propTypes: {
-    user: React.PropTypes.object.isRequired,
-    updateUser: React.PropTypes.func.isRequired
+    user: PropTypes.object.isRequired,
+    updateUser: PropTypes.func.isRequired,
   },
 
   OPTIONS: {
     upload: 'Upload a Photo',
     gravatar: 'Use Gravatar',
-    letter_avatar: 'Use my initials'
+    letter_avatar: 'Use my initials',
   },
 
   onChange(ev) {
@@ -27,8 +31,13 @@ const AvatarRadio = React.createClass({
       radios.push(
         <li className="radio" key={opt}>
           <label>
-            <input type="radio" name="avatar-type" value={opt} onChange={this.onChange}
-                   checked={this.props.user.avatar.avatarType === opt}/>
+            <input
+              type="radio"
+              name="avatar-type"
+              value={opt}
+              onChange={this.onChange}
+              checked={this.props.user.avatar.avatarType === opt}
+            />
             {this.OPTIONS[opt]}
           </label>
         </li>
@@ -37,12 +46,10 @@ const AvatarRadio = React.createClass({
     return (
       <div>
         <legend>{t('Avatar Type')}</legend>
-        <ul className="radio-inputs">
-          {radios}
-        </ul>
+        <ul className="radio-inputs">{radios}</ul>
       </div>
     );
-  }
+  },
 });
 
 export default AvatarRadio;

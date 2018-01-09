@@ -9,7 +9,11 @@ from __future__ import absolute_import, print_function
 
 from sentry.logging import LoggingFormat
 from sentry.options import (
-    FLAG_IMMUTABLE, FLAG_NOSTORE, FLAG_PRIORITIZE_DISK, FLAG_REQUIRED, FLAG_ALLOW_EMPTY,
+    FLAG_IMMUTABLE,
+    FLAG_NOSTORE,
+    FLAG_PRIORITIZE_DISK,
+    FLAG_REQUIRED,
+    FLAG_ALLOW_EMPTY,
     register,
 )
 from sentry.utils.types import Dict, String, Sequence
@@ -21,6 +25,7 @@ from sentry.utils.types import Dict, String, Sequence
 # System
 register('system.admin-email', flags=FLAG_REQUIRED)
 register('system.support-email', flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register('system.security-email', flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register('system.databases', type=Dict, flags=FLAG_NOSTORE)
 # register('system.debug', default=False, flags=FLAG_NOSTORE)
 register('system.rate-limit', default=0, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
@@ -72,14 +77,36 @@ register('sms.twilio-number', default='', flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITI
 
 # U2F
 register('u2f.app-id', default='', flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
-register('u2f.facets', default=(), type=Sequence,
-         flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register('u2f.facets', default=(), type=Sequence, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 
 register('auth.ip-rate-limit', default=0, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
 register('auth.user-rate-limit', default=0, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register(
+    'auth.allow-registration',
+    default=False,
+    flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK | FLAG_REQUIRED
+)
 
 register('api.rate-limit.org-create', default=5, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+
+# Beacon
+
+register('beacon.anonymous', default=True, flags=FLAG_REQUIRED)
 
 # Filestore
 register('filestore.backend', default='filesystem', flags=FLAG_NOSTORE)
 register('filestore.options', default={'location': '/tmp/sentry-files'}, flags=FLAG_NOSTORE)
+
+# Symbol server
+register('symbolserver.enabled', default=False, flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK)
+register(
+    'symbolserver.options',
+    default={'url': 'http://127.0.0.1:3000'},
+    flags=FLAG_ALLOW_EMPTY | FLAG_PRIORITIZE_DISK
+)
+
+# Analytics
+register('analytics.backend', default='noop', flags=FLAG_NOSTORE)
+register('analytics.options', default={}, flags=FLAG_NOSTORE)
+
+register('cloudflare.secret-key', default='')

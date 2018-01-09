@@ -5,12 +5,24 @@ from __future__ import absolute_import
 import mock
 
 from exam import fixture
+from django.http import HttpRequest
 
 from sentry import options
 from sentry.models import Project
 from sentry.testutils import TestCase
 from sentry.utils.http import (
-    is_same_domain, is_valid_origin, get_origins, absolute_uri, is_valid_ip,
+    is_same_domain,
+    is_valid_origin,
+    get_origins,
+    absolute_uri,
+    origin_from_request,
+    heuristic_decode,
+)
+from sentry.utils.data_filters import (
+    is_valid_ip,
+    is_valid_release,
+    is_valid_error_message,
+    FilterTypes,
 )
 
 
@@ -19,7 +31,7 @@ class AbsoluteUriTest(TestCase):
         assert absolute_uri() == options.get('system.url-prefix')
 
     def test_with_path(self):
-        assert absolute_uri('/foo/bar') == '%s/foo/bar' % (options.get('system.url-prefix'),)
+        assert absolute_uri('/foo/bar') == '%s/foo/bar' % (options.get('system.url-prefix'), )
 
 
 class SameDomainTestCase(TestCase):
@@ -80,6 +92,14 @@ class GetOriginsTestCase(TestCase):
         with self.settings(SENTRY_ALLOW_ORIGIN='http://example.com'):
             result = get_origins(None)
             self.assertEquals(result, frozenset(['http://example.com']))
+
+    def test_empty_origin_values(self):
+        project = Project.objects.get()
+        project.update_option('sentry:origins', [u'*', None, ''])
+
+        with self.settings(SENTRY_ALLOW_ORIGIN=None):
+            result = get_origins(project)
+            self.assertEquals(result, frozenset([u'*']))
 
 
 class IsValidOriginTestCase(TestCase):
@@ -213,11 +233,27 @@ class IsValidOriginTestCase(TestCase):
         result = self.isValidOrigin('http://example.com', ['.'])
         assert result is False
 
+    def test_wildcard_hostname_with_port(self):
+        result = self.isValidOrigin('http://example.com:1234', ['*:1234'])
+        assert result is True
+
+    def test_without_hostname(self):
+        result = self.isValidOrigin('foo://', ['foo://*'])
+        assert result is True
+        result = self.isValidOrigin('foo://', ['foo://'])
+        assert result is True
+        result = self.isValidOrigin('foo://', ['example.com'])
+        assert result is False
+        result = self.isValidOrigin('foo://a', ['foo://'])
+        assert result is False
+        result = self.isValidOrigin('foo://a', ['foo://*'])
+        assert result is True
+
 
 class IsValidIPTestCase(TestCase):
     def is_valid_ip(self, ip, inputs):
         self.project.update_option('sentry:blacklisted_ips', inputs)
-        return is_valid_ip(ip, self.project)
+        return is_valid_ip(self.project, ip)
 
     def test_not_in_blacklist(self):
         assert self.is_valid_ip('127.0.0.1', [])
@@ -230,3 +266,115 @@ class IsValidIPTestCase(TestCase):
     def test_match_blacklist_range(self):
         assert not self.is_valid_ip('127.0.0.1', ['127.0.0.0/8'])
         assert not self.is_valid_ip('127.0.0.1', ['0.0.0.0', '127.0.0.0/8', '192.168.1.0/8'])
+
+    def test_garbage_input(self):
+        assert self.is_valid_ip('127.0.0.1', ['lol/bar'])
+
+
+class IsValidReleaseTestCase(TestCase):
+    def is_valid_release(self, value, inputs):
+        self.project.update_option('sentry:{}'.format(FilterTypes.RELEASES), inputs)
+        return is_valid_release(self.project, value)
+
+    def test_release_not_in_list(self):
+        assert self.is_valid_release('1.2.3', None)
+        assert self.is_valid_release('1.2.3', [])
+        assert self.is_valid_release('1.2.3', ['1.1.1', '1.1.2', '1.2.1'])
+
+    def test_release_match_list(self):
+        assert not self.is_valid_release('1.2.3', ['1.2.3'])
+        assert not self.is_valid_release('1.2.3', ['1.2.*', '1.3.0', '1.3.1'])
+        assert not self.is_valid_release('1.2.3', ['1.3.0', '1.*', '1.3.1'])
+
+    def test_garbage_data(self):
+        assert self.is_valid_release(1, ['1.2.3'])
+
+
+class IsValidErrorMessageTestCase(TestCase):
+    def is_valid_error_message(self, value, inputs):
+        self.project.update_option('sentry:{}'.format(FilterTypes.ERROR_MESSAGES), inputs)
+        return is_valid_error_message(self.project, value)
+
+    def test_error_class_not_in_list(self):
+        assert self.is_valid_error_message(
+            'ZeroDivisionError: integer division or modulo by zero', None
+        )
+        assert self.is_valid_error_message(
+            'ZeroDivisionError: integer division or modulo by zero', []
+        )
+        assert self.is_valid_error_message(
+            'ZeroDivisionError: integer division or modulo by zero',
+            ['TypeError*', '*: cannot import name*']
+        )
+
+    def test_error_class_match_list(self):
+        assert not self.is_valid_error_message(
+            'ImportError: cannot import name is_valid', ['*: cannot import name*']
+        )
+        assert not self.is_valid_error_message(
+            'ZeroDivisionError: divided by 0', ['ImportError*', 'TypeError*', '*: divided by 0']
+        )
+
+    def test_garbage_data(self):
+        assert self.is_valid_error_message(1, ['ImportError*'])
+        assert self.is_valid_error_message(None, ['ImportError*'])
+        assert self.is_valid_error_message({}, ['ImportError*'])
+
+
+class OriginFromRequestTestCase(TestCase):
+    def test_nothing(self):
+        request = HttpRequest()
+        assert origin_from_request(request) is None
+
+    def test_origin(self):
+        request = HttpRequest()
+        request.META['HTTP_ORIGIN'] = 'http://example.com'
+        request.META['HTTP_REFERER'] = 'nope'
+        assert origin_from_request(request) == 'http://example.com'
+
+    def test_referer(self):
+        request = HttpRequest()
+        request.META['HTTP_REFERER'] = 'http://example.com/foo/bar'
+        assert origin_from_request(request) == 'http://example.com'
+
+    def test_null_origin(self):
+        request = HttpRequest()
+        request.META['HTTP_ORIGIN'] = 'null'
+        assert origin_from_request(request) is None
+
+        request.META['HTTP_REFERER'] = 'http://example.com'
+        assert origin_from_request(request) == 'http://example.com'
+
+
+class HeuristicDecodeTestCase(TestCase):
+    json_body = '{"key": "value", "key2": "value2"}'
+    url_body = 'key=value&key2=value2'
+
+    def test_json(self):
+        data, content_type = heuristic_decode(self.json_body, 'application/json')
+        assert data == {'key': 'value', 'key2': 'value2'}
+        assert content_type == 'application/json'
+
+    def test_url_encoded(self):
+        data, content_type = heuristic_decode(self.url_body, 'application/x-www-form-urlencoded')
+        assert data == {'key': ['value'], 'key2': ['value2']}
+        assert content_type == 'application/x-www-form-urlencoded'
+
+    def test_possible_type_mismatch(self):
+        data, content_type = heuristic_decode(self.json_body, 'application/x-www-form-urlencoded')
+        assert data == {'key': 'value', 'key2': 'value2'}
+        assert content_type == 'application/json'
+
+        data, content_type = heuristic_decode(self.url_body, 'application/json')
+        assert data == {'key': ['value'], 'key2': ['value2']}
+        assert content_type == 'application/x-www-form-urlencoded'
+
+    def test_no_possible_type(self):
+        data, content_type = heuristic_decode(self.json_body)
+        assert data == {'key': 'value', 'key2': 'value2'}
+        assert content_type == 'application/json'
+
+    def test_unable_to_decode(self):
+        data, content_type = heuristic_decode('string body', 'text/plain')
+        assert data == 'string body'
+        assert content_type == 'text/plain'

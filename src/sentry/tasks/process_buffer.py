@@ -13,31 +13,30 @@ import logging
 from sentry.tasks.base import instrumented_task
 from sentry.utils.locking import UnableToAcquireLock
 
-
 logger = logging.getLogger(__name__)
 
 
-@instrumented_task(
-    name='sentry.tasks.process_buffer.process_pending')
+@instrumented_task(name='sentry.tasks.process_buffer.process_pending')
 def process_pending():
     """
     Process pending buffers.
     """
-    from sentry import app
-    lock = app.locks.get('buffer:process_pending', duration=60)
+    from sentry import buffer
+    from sentry.app import locks
+
+    lock = locks.get('buffer:process_pending', duration=60)
     try:
         with lock.acquire():
-            app.buffer.process_pending()
+            buffer.process_pending()
     except UnableToAcquireLock as error:
         logger.warning('process_pending.fail', extra={'error': error})
 
 
-@instrumented_task(
-    name='sentry.tasks.process_buffer.process_incr')
+@instrumented_task(name='sentry.tasks.process_buffer.process_incr')
 def process_incr(**kwargs):
     """
     Processes a buffer event.
     """
-    from sentry import app
+    from sentry import buffer
 
-    app.buffer.process(**kwargs)
+    buffer.process(**kwargs)

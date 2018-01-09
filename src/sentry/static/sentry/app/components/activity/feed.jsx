@@ -1,4 +1,7 @@
+import PropTypes from 'prop-types';
 import React from 'react';
+
+import createReactClass from 'create-react-class';
 
 import ApiMixin from '../../mixins/apiMixin';
 import ActivityItem from './item';
@@ -8,12 +11,14 @@ import Pagination from '../pagination';
 import {t} from '../../locale';
 import {logException} from '../../utils/logging';
 
-const ActivityFeed = React.createClass({
+const ActivityFeed = createReactClass({
+  displayName: 'ActivityFeed',
+
   propTypes: {
-    endpoint: React.PropTypes.string,
-    query: React.PropTypes.object,
-    renderEmpty: React.PropTypes.func,
-    pagination: React.PropTypes.bool
+    endpoint: PropTypes.string,
+    query: PropTypes.object,
+    renderEmpty: PropTypes.func,
+    pagination: PropTypes.bool,
   },
 
   mixins: [ApiMixin],
@@ -41,7 +46,10 @@ const ActivityFeed = React.createClass({
   componentWillReceiveProps(nextProps) {
     let location = this.props.location;
     let nextLocation = nextProps.location;
-    if (location.pathname != nextLocation.pathname || location.search != nextLocation.search) {
+    if (
+      location.pathname != nextLocation.pathname ||
+      location.search != nextLocation.search
+    ) {
       this.remountComponent();
     }
   },
@@ -72,7 +80,7 @@ const ActivityFeed = React.createClass({
           loading: false,
           error: true,
         });
-      }
+      },
     });
   },
 
@@ -80,22 +88,18 @@ const ActivityFeed = React.createClass({
     let body;
     let {orgId} = this.props.params;
 
-    if (this.state.loading)
-      body = this.renderLoading();
-    else if (this.state.error)
-      body = <LoadingError onRetry={this.fetchData} />;
+    if (this.state.loading) body = this.renderLoading();
+    else if (this.state.error) body = <LoadingError onRetry={this.fetchData} />;
     else if (this.state.itemList.length > 0) {
       body = (
         <div className="activity-container">
           <ul className="activity">
-            {this.state.itemList.map((item) => {
+            {this.state.itemList.map(item => {
               try {
-                return (
-                  <ActivityItem key={item.id} orgId={orgId} item={item} />
-                );
+                return <ActivityItem key={item.id} orgId={orgId} item={item} />;
               } catch (ex) {
                 logException(ex, {
-                  itemId: item.id
+                  itemId: item.id,
                 });
                 return null;
               }
@@ -103,9 +107,7 @@ const ActivityFeed = React.createClass({
           </ul>
         </div>
       );
-    }
-    else
-      body = (this.props.renderEmpty || this.renderEmpty)();
+    } else body = (this.props.renderEmpty || this.renderEmpty)();
 
     return body;
   },
@@ -126,12 +128,13 @@ const ActivityFeed = React.createClass({
     return (
       <div>
         {this.renderResults()}
-        {this.props.pagination && this.state.pageLinks &&
-          <Pagination pageLinks={this.state.pageLinks} {...this.props} />
-        }
+        {this.props.pagination &&
+          this.state.pageLinks && (
+            <Pagination pageLinks={this.state.pageLinks} {...this.props} />
+          )}
       </div>
     );
-  }
+  },
 });
 
 export default ActivityFeed;

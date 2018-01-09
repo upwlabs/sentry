@@ -1,24 +1,26 @@
+import PropTypes from 'prop-types';
 import React from 'react';
 import {t} from '../../locale';
 
-const EventErrorItem = React.createClass({
-  propTypes: {
-    error: React.PropTypes.object.isRequired
-  },
+class EventErrorItem extends React.Component {
+  static propTypes = {
+    error: PropTypes.object.isRequired,
+  };
 
-  getInitialState(){
-    return {
+  constructor(...args) {
+    super(...args);
+    this.state = {
       isOpen: false,
     };
-  },
+  }
 
   shouldComponentUpdate(nextProps, nextState) {
     return this.state.isOpen !== nextState.isOpen;
-  },
+  }
 
-  toggle() {
+  toggle = () => {
     this.setState({isOpen: !this.state.isOpen});
-  },
+  };
 
   render() {
     let error = this.props.error;
@@ -26,11 +28,18 @@ const EventErrorItem = React.createClass({
     return (
       <li>
         {error.message}
-        <small> <a style={{marginLeft: 10}} onClick={this.toggle}>{isOpen ? t('Collapse') : t('Expand')}</a></small>
-        <pre style={{display: isOpen ? 'block' : 'none'}}>{JSON.stringify(error.data, null, 2)}</pre>
+        <small>
+          {' '}
+          <a style={{marginLeft: 10}} onClick={this.toggle}>
+            {isOpen ? t('Collapse') : t('Expand')}
+          </a>
+        </small>
+        <pre style={{display: isOpen ? 'block' : 'none'}}>
+          {JSON.stringify(error.data, null, 2)}
+        </pre>
       </li>
     );
   }
-});
+}
 
 export default EventErrorItem;

@@ -4,7 +4,10 @@ from __future__ import absolute_import
 
 from datetime import datetime, timedelta
 
-from sentry.models import GroupAssignee, GroupBookmark, GroupStatus, GroupTagValue
+from sentry import tagstore
+from sentry.models import (
+    GroupAssignee, GroupBookmark, GroupStatus, GroupSubscription
+)
 from sentry.search.base import ANY
 from sentry.search.django.backend import DjangoSearchBackend
 from sentry.testutils import TestCase
@@ -17,8 +20,10 @@ class DjangoSearchBackendTest(TestCase):
     def setUp(self):
         self.backend = self.create_backend()
 
-        self.project1 = self.create_project(name='foo')
-        self.project2 = self.create_project(name='bar')
+        self.project1 = self.create_project(name='project1')
+        self.env1 = self.create_environment(project=self.project1, name='env1')
+        self.project2 = self.create_project(name='project2')
+        self.env2 = self.create_environment(project=self.project2, name='env2')
 
         self.group1 = self.create_group(
             project=self.project1,
@@ -69,16 +74,18 @@ class DjangoSearchBackendTest(TestCase):
         )
 
         for key, value in self.event1.data['tags']:
-            GroupTagValue.objects.create(
-                project=self.group1.project,
-                group=self.group1,
+            tagstore.create_group_tag_value(
+                project_id=self.group1.project_id,
+                group_id=self.group1.id,
+                environment_id=None,
                 key=key,
                 value=value,
             )
         for key, value in self.event2.data['tags']:
-            GroupTagValue.objects.create(
-                project=self.group2.project,
-                group=self.group2,
+            tagstore.create_group_tag_value(
+                project_id=self.group2.project_id,
+                group_id=self.group2.id,
+                environment_id=None,
                 key=key,
                 value=value,
             )
@@ -93,6 +100,20 @@ class DjangoSearchBackendTest(TestCase):
             user=self.user,
             group=self.group2,
             project=self.group2.project,
+        )
+
+        GroupSubscription.objects.create(
+            user=self.user,
+            group=self.group1,
+            project=self.group1.project,
+            is_active=True,
+        )
+
+        GroupSubscription.objects.create(
+            user=self.user,
+            group=self.group2,
+            project=self.group2.project,
+            is_active=False,
         )
 
     def test_query(self):
@@ -130,7 +151,10 @@ class DjangoSearchBackendTest(TestCase):
         assert results[0] == self.group2
 
     def test_tags(self):
-        results = self.backend.query(self.project1, tags={'env': 'staging'})
+        results = self.backend.query(
+            self.project1,
+            tags={
+                'env': 'staging'})
         assert len(results) == 1
         assert results[0] == self.group2
 
@@ -140,7 +164,10 @@ class DjangoSearchBackendTest(TestCase):
         results = self.backend.query(self.project1, tags={'env': ANY})
         assert len(results) == 2
 
-        results = self.backend.query(self.project1, tags={'env': 'staging', 'server': 'example.com'})
+        results = self.backend.query(
+            self.project1, tags={'env': 'staging',
+                                 'server': 'example.com'}
+        )
         assert len(results) == 1
         assert results[0] == self.group2
 
@@ -148,7 +175,10 @@ class DjangoSearchBackendTest(TestCase):
         assert len(results) == 1
         assert results[0] == self.group2
 
-        results = self.backend.query(self.project1, tags={'env': 'staging', 'server': 'bar.example.com'})
+        results = self.backend.query(
+            self.project1, tags={'env': 'staging',
+                                 'server': 'bar.example.com'}
+        )
         assert len(results) == 0
 
     def test_bookmarked_by(self):
@@ -195,6 +225,29 @@ class DjangoSearchBackendTest(TestCase):
         assert len(results) == 1
         assert results[0] == self.group1
 
+    def test_last_seen_filter(self):
+        results = self.backend.query(
+            self.project1,
+            last_seen_from=self.group1.last_seen,
+        )
+        assert len(results) == 1
+        assert results[0] == self.group1
+
+        results = self.backend.query(
+            self.project1,
+            last_seen_to=self.group2.last_seen + timedelta(minutes=1),
+        )
+        assert len(results) == 1
+        assert results[0] == self.group2
+
+        results = self.backend.query(
+            self.project1,
+            last_seen_from=self.group1.last_seen,
+            last_seen_to=self.group1.last_seen + timedelta(minutes=1),
+        )
+        assert len(results) == 1
+        assert results[0] == self.group1
+
     def test_date_filter(self):
         results = self.backend.query(
             self.project1,
@@ -233,3 +286,11 @@ class DjangoSearchBackendTest(TestCase):
         results = self.backend.query(self.project1, assigned_to=self.user)
         assert len(results) == 1
         assert results[0] == self.group2
+
+    def test_subscribed_by(self):
+        results = self.backend.query(
+            self.group1.project,
+            subscribed_by=self.user,
+        )
+        assert len(results) == 1
+        assert results[0] == self.group1

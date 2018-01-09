@@ -1,23 +1,24 @@
+import PropTypes from 'prop-types';
 import React from 'react';
 import {Link} from 'react-router';
 
-const Version = React.createClass({
-  propTypes: {
-    anchor: React.PropTypes.bool,
-    version: React.PropTypes.string.isRequired,
-    orgId: React.PropTypes.string.isRequired,
-    projectId: React.PropTypes.string.isRequired
-  },
+import {getShortVersion} from '../utils';
 
-  getDefaultProps() {
-    return {
-      anchor: true
-    };
-  },
+class Version extends React.Component {
+  static propTypes = {
+    anchor: PropTypes.bool,
+    version: PropTypes.string.isRequired,
+    orgId: PropTypes.string,
+    projectId: PropTypes.string,
+  };
+
+  static defaultProps = {
+    anchor: true,
+  };
 
   render() {
     let {orgId, projectId, version} = this.props;
-    let shortVersion = version.match(/^[a-f0-9]{40}$/) ? version.substr(0, 12) : version;
+    let shortVersion = getShortVersion(version);
 
     if (this.props.anchor) {
       return (
@@ -30,7 +31,6 @@ const Version = React.createClass({
     }
     return <span title={version}>{shortVersion}</span>;
   }
-});
+}
 
 export default Version;
-

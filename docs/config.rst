@@ -29,6 +29,17 @@ the ``sentry config`` CLI helper.
 General
 -------
 
+.. describe:: SENTRY_ENVIRONMENT
+
+    Declared in system environment.
+
+    The environment name for this installation. This will also control defaults
+    for things like ``DEBUG``.
+
+    ::
+
+        SENTRY_ENVIRONMENT=production sentry ...
+
 .. describe:: system.admin-email
 
     Declared in ``config.yml``.
@@ -264,6 +275,15 @@ The following settings are available for the built-in webserver:
             'workers': 10,
             'buffer-size': 32768,
         }
+
+Additionally, if you're using SSL, you'll want to configure the following settings
+in ``sentry.conf.py``:
+
+.. code-block:: python
+
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 .. _config-smtp-server:
 

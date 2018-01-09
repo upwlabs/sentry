@@ -10,7 +10,6 @@ from __future__ import absolute_import, print_function
 import os
 import click
 
-
 DEFAULT_SETTINGS_MODULE = 'sentry.conf.server'
 DEFAULT_SETTINGS_CONF = 'config.yml'
 DEFAULT_SETTINGS_OVERRIDE = 'sentry.conf.py'
@@ -18,7 +17,7 @@ DEFAULT_SETTINGS_OVERRIDE = 'sentry.conf.py'
 
 def generate_secret_key():
     from django.utils.crypto import get_random_string
-    chars = u'abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)'
+    chars = u'abcdefghijklmnopqrstuvwxyz0123456789!@#%^&*(-_=+)'
     return get_random_string(50, chars)
 
 
@@ -76,20 +75,15 @@ def discover_configs():
     # This is the old, now deprecated code path where SENTRY_CONF is pointed directly
     # to a python file
     if config.endswith(('.py', '.conf')) or os.path.isfile(config):
-        return (
-            os.path.dirname(config),
-            config,
-            None,
-        )
+        return (os.path.dirname(config), config, None, )
 
     return (
-        config,
-        os.path.join(config, DEFAULT_SETTINGS_OVERRIDE),
+        config, os.path.join(config, DEFAULT_SETTINGS_OVERRIDE),
         os.path.join(config, DEFAULT_SETTINGS_CONF),
     )
 
 
-def configure(ctx, py, yaml, skip_backend_validation=False):
+def configure(ctx, py, yaml, skip_service_validation=False):
     """
     Given the two different config files, set up the environment.
 
@@ -107,13 +101,10 @@ def configure(ctx, py, yaml, skip_backend_validation=False):
     # which aren't common in default system registries
     import mimetypes
     for type, ext in (
-        ('application/json', 'map'),
-        ('application/font-woff', 'woff'),
-        ('application/font-woff2', 'woff2'),
-        ('application/vnd.ms-fontobject', 'eot'),
-        ('application/x-font-ttf', 'ttf'),
-        ('application/x-font-ttf', 'ttc'),
-        ('font/opentype', 'otf'),
+        ('application/json', 'map'), ('application/font-woff', 'woff'),
+        ('application/font-woff2', 'woff2'), ('application/vnd.ms-fontobject', 'eot'),
+        ('application/x-font-ttf', 'ttf'), ('application/x-font-ttf',
+                                            'ttc'), ('font/opentype', 'otf'),
     ):
         mimetypes.add_type(type, '.' + ext)
 
@@ -124,23 +115,23 @@ def configure(ctx, py, yaml, skip_backend_validation=False):
         # directly to a file, in which case, this file must exist
         if not os.path.exists(py):
             if ctx:
-                raise click.ClickException("Configuration file does not exist. Use 'sentry init' to initialize the file.")
-            raise ValueError("Configuration file does not exist at '%s'" % click.format_filename(py))
+                raise click.ClickException(
+                    "Configuration file does not exist. Use 'sentry init' to initialize the file."
+                )
+            raise ValueError(
+                "Configuration file does not exist at '%s'" % click.format_filename(py)
+            )
     elif not os.path.exists(yaml) and not os.path.exists(py):
         if ctx:
-            raise click.ClickException("Configuration file does not exist. Use 'sentry init' to initialize the file.")
+            raise click.ClickException(
+                "Configuration file does not exist. Use 'sentry init' to initialize the file."
+            )
         raise ValueError("Configuration file does not exist at '%s'" % click.format_filename(yaml))
 
     # Add autoreload for config.yml file if needed
-    if 'UWSGI_PY_AUTORELOAD' in os.environ:
-        if yaml is not None and os.path.exists(yaml):
-            try:
-                import uwsgi
-                from uwsgidecorators import filemon
-            except ImportError:
-                pass
-            else:
-                filemon(yaml)(uwsgi.reload)
+    if yaml is not None and os.path.exists(yaml):
+        from sentry.utils.uwsgi import reload_on_change
+        reload_on_change(yaml)
 
     os.environ['DJANGO_SETTINGS_MODULE'] = 'sentry_config'
 
@@ -152,11 +143,14 @@ def configure(ctx, py, yaml, skip_backend_validation=False):
     hasattr(settings, 'INSTALLED_APPS')
 
     from .initializer import initialize_app, on_configure
-    initialize_app({
-        'config_path': py,
-        'settings': settings,
-        'options': yaml,
-    }, skip_backend_validation=skip_backend_validation)
+    initialize_app(
+        {
+            'config_path': py,
+            'settings': settings,
+            'options': yaml,
+        },
+        skip_service_validation=skip_service_validation
+    )
     on_configure({'settings': settings})
 
     __installed = True

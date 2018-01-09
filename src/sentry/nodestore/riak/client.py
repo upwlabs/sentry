@@ -8,9 +8,11 @@ sentry.nodestore.riak.client
 
 from __future__ import absolute_import
 
+import functools
 import six
 import sys
 import socket
+from base64 import b64encode
 from random import shuffle
 from six.moves.queue import Queue
 from time import time
@@ -24,10 +26,55 @@ from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.connection import HTTPConnection
 from urllib3.exceptions import HTTPError
 
+DEFAULT_NODES = ({'host': '127.0.0.1', 'port': 8098}, )
 
-DEFAULT_NODES = (
-    {'host': '127.0.0.1', 'port': 8098},
-)
+
+def encode_basic_auth(auth):
+    auth = ':'.join(auth)
+    return 'Basic ' + b64encode(auth).decode('utf-8')
+
+
+class SimpleThreadedWorkerPool(object):
+    """\
+    Manages a simple threaded worker pool. The pool will be started when the
+    first job is submitted, and will run to process completion.
+    """
+
+    def __init__(self, size):
+        assert size > 0, 'pool must have at laest one worker thread'
+
+        self.__started = False
+        self.__size = size
+
+    def __start(self):
+        self.__tasks = tasks = Queue()
+
+        def consumer():
+            while True:
+                func, args, kwargs, cb = tasks.get()
+                try:
+                    rv = func(*args, **kwargs)
+                except Exception as e:
+                    rv = e
+                finally:
+                    cb(rv)
+                    tasks.task_done()
+
+        for _ in range(self.__size):
+            t = Thread(target=consumer)
+            t.setDaemon(True)
+            t.start()
+
+        self.__started = True
+
+    def submit(self, func_arg_kwargs_cb):
+        """\
+        Submit a task to the worker pool.
+        """
+        if not self.__started:
+            self.__start()
+
+        self.__tasks.put(func_arg_kwargs_cb)
 
 
 class RiakClient(object):
@@ -35,32 +82,10 @@ class RiakClient(object):
     A thread-safe simple light-weight riak client that does only
     the bare minimum.
     """
+
     def __init__(self, multiget_pool_size=5, **kwargs):
         self.manager = ConnectionManager(**kwargs)
-        self.queue = Queue()
-
-        # TODO: maybe start this lazily? Probably not valuable though
-        # since we definitely will need it.
-        self._start(multiget_pool_size)
-
-    def _start(self, size):
-        assert size > 0
-        for _ in range(size):
-            t = Thread(target=self._target)
-            t.setDaemon(True)
-            t.start()
-
-    def _target(self):
-        q = self.queue
-        while True:
-            func, args, kwargs, cb = q.get()
-            try:
-                rv = func(*args, **kwargs)
-            except Exception as e:
-                rv = e
-            finally:
-                cb(rv)
-                q.task_done()
+        self.pool = SimpleThreadedWorkerPool(multiget_pool_size)
 
     def build_url(self, bucket, key, qs):
         url = '/buckets/%s/keys/%s' % tuple(map(quote_plus, (bucket, key)))
@@ -74,20 +99,27 @@ class RiakClient(object):
         headers['content-type'] = 'application/json'
 
         return self.manager.urlopen(
-            'PUT', self.build_url(bucket, key, kwargs),
+            'PUT',
+            self.build_url(bucket, key, kwargs),
             headers=headers,
             body=data,
         )
 
     def delete(self, bucket, key, headers=None, **kwargs):
         return self.manager.urlopen(
-            'DELETE', self.build_url(bucket, key, kwargs),
+            'DELETE',
+            self.build_url(bucket, key, kwargs),
             headers=headers,
         )
 
     def get(self, bucket, key, headers=None, **kwargs):
+        if headers is None:
+            headers = {}
+        headers['accept-encoding'] = 'gzip'  # urllib3 will automatically decompress
+
         return self.manager.urlopen(
-            'GET', self.build_url(bucket, key, kwargs),
+            'GET',
+            self.build_url(bucket, key, kwargs),
             headers=headers,
         )
 
@@ -97,24 +129,30 @@ class RiakClient(object):
         for all requests.
         """
         # Each request is paired with a thread.Event to signal when it is finished
-        requests = [
-            (key, self.build_url(bucket, key, {'foo': 'bar'}), Event())
-            for key in keys
-        ]
+        requests = [(key, self.build_url(bucket, key, kwargs), Event()) for key in keys]
 
         results = {}
-        for key, url, event in requests:
-            def callback(rv, key=key, event=event):
-                results[key] = rv
-                # Signal that this request is finished
-                event.set()
 
-            self.queue.put((
-                self.manager.urlopen,  # func
-                ('GET', url),  # args
-                {'headers': headers},  # kwargs
-                callback,  # callback
-            ))
+        def callback(key, event, rv):
+            results[key] = rv
+            # Signal that this request is finished
+            event.set()
+
+        for key, url, event in requests:
+            self.pool.submit(
+                (
+                    self.manager.urlopen,  # func
+                    ('GET', url),  # args
+                    {
+                        'headers': headers
+                    },  # kwargs
+                    functools.partial(
+                        callback,
+                        key,
+                        event,
+                    ),  # callback
+                )
+            )
 
         # Now we wait for all of the callbacks to be finished
         for _, _, event in requests:
@@ -135,14 +173,27 @@ class RoundRobinStrategy(object):
         return connections[self.i % len(connections)]
 
 
+class FirstStrategy(object):
+    def next(self, connections):
+        return connections[0]
+
+
 class ConnectionManager(object):
     """
     A thread-safe multi-host http connection manager.
     """
-    def __init__(self, hosts=DEFAULT_NODES, strategy=RoundRobinStrategy, randomize=True,
-                 timeout=3, cooldown=5, max_retries=None, tcp_keepalive=True):
+
+    def __init__(
+        self,
+        hosts=DEFAULT_NODES,
+        strategy=RoundRobinStrategy,
+        randomize=True,
+        timeout=3,
+        cooldown=5,
+        max_retries=None,
+        tcp_keepalive=True
+    ):
         assert hosts
-        self.strategy = strategy()
         self.dead_connections = []
         self.timeout = timeout
         self.cooldown = cooldown
@@ -159,6 +210,16 @@ class ConnectionManager(object):
         if randomize:
             shuffle(self.connections)
 
+        # If we have a single connection, we can short-circuit some logic
+        self.single_connection = len(hosts) == 1
+
+        # If we only have one connection, let's override and use a more optimized
+        # strategy
+        if self.single_connection:
+            strategy = FirstStrategy
+
+        self.strategy = strategy()
+
         # Lock needed when mutating the alive/dead list of connections
         self._lock = Lock()
 
@@ -169,14 +230,19 @@ class ConnectionManager(object):
         options = {
             'timeout': self.timeout,
             'strict': True,
-            'retries': 2,
+            'retries': host.get('retries', 2),
             # Max of 5 connections open per host
             # this is arbitrary. The # of connections can burst
             # above 5 if needed becuase we're also setting
             # block=False
-            'maxsize': 5,
+            'maxsize': host.get('maxsize', 5),
             'block': False,
+            'headers': host.get('headers', {})
         }
+
+        if 'basic_auth' in host:
+            options['headers']['authorization'] = encode_basic_auth(host['basic_auth'])
+
         if self.tcp_keepalive:
             options['socket_options'] = HTTPConnection.default_socket_options + [
                 (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
@@ -185,8 +251,7 @@ class ConnectionManager(object):
         # Support backwards compatibility with `http_port`
         if 'http_port' in host:
             import warnings
-            warnings.warn("'http_port' has been deprecated. Use 'port'.",
-                          DeprecationWarning)
+            warnings.warn("'http_port' has been deprecated. Use 'port'.", DeprecationWarning)
             host['port'] = host.pop('http_port')
 
         addr = host.get('host', '127.0.0.1')
@@ -198,13 +263,15 @@ class ConnectionManager(object):
             connection_cls = HTTPSConnectionPool
             verify_ssl = host.get('verify_ssl', False)
             if verify_ssl:
-                options.extend({
-                    'cert_reqs': host.get('cert_reqs', 'CERT_REQUIRED'),
-                    'ca_certs': host.get('ca_certs', ca_certs())
-                })
+                options.extend(
+                    {
+                        'cert_reqs': host.get('cert_reqs', 'CERT_REQUIRED'),
+                        'ca_certs': host.get('ca_certs', ca_certs())
+                    }
+                )
         return connection_cls(addr, port, **options)
 
-    def urlopen(self, method, path, **kwargs):
+    def urlopen(self, method, path, headers=None, **kwargs):
         """
         Make a request using the next server according to the connection
         strategy, and retries up to max_retries attempts. Ultimately,
@@ -230,8 +297,10 @@ class ConnectionManager(object):
                     self.force_revive()
 
                 conn = self.strategy.next(self.connections)  # NOQA
+                if headers is not None:
+                    headers = dict(conn.headers, **headers)
                 try:
-                    return conn.urlopen(method, path, **kwargs)
+                    return conn.urlopen(method, path, headers=headers, **kwargs)
                 except HTTPError:
                     self.mark_dead(conn)
                     last_error = sys.exc_info()
@@ -247,6 +316,15 @@ class ConnectionManager(object):
         """
         Mark a connection as dead.
         """
+
+        # If we are operating with only a single connection,
+        # it's futile to mark the connection as dead since it'll
+        # just flap between active and dead with no value. In the
+        # event of one connection, we just want to keep retrying
+        # in hopes that it'll eventually work.
+        if self.single_connection:
+            return
+
         timeout = time() + self.cooldown
         with self._lock:
             self.dead_connections.append((conn, timeout))

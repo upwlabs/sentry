@@ -19,12 +19,14 @@ class EventSerializerTest(TestCase):
         assert result['eventID'] == 'a'
 
     def test_eventerror(self):
-        event = self.create_event(data={
-            'errors': [{
-                'type': EventError.INVALID_DATA,
-                'name': u'ü',
-            }],
-        })
+        event = self.create_event(
+            data={
+                'errors': [{
+                    'type': EventError.INVALID_DATA,
+                    'name': u'ü',
+                }],
+            }
+        )
 
         result = serialize(event)
         assert len(result['errors']) == 1
@@ -45,5 +47,7 @@ class SharedEventSerializerTest(TestCase):
         assert result.get('contexts') is None
         assert result.get('user') is None
         assert result.get('tags') is None
+        assert 'sdk' not in result
+        assert 'errors' not in result
         for entry in result['entries']:
             assert entry['type'] != 'breadcrumbs'

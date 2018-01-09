@@ -1,5 +1,7 @@
+import PropTypes from 'prop-types';
 import React from 'react';
-import _ from 'underscore';
+import createReactClass from 'create-react-class';
+import _ from 'lodash';
 import classNames from 'classnames';
 
 import ClippedBox from '../../../components/clippedBox';
@@ -16,33 +18,35 @@ export function trimPackage(pkg) {
   let pieces = pkg.split(/\//g);
   let rv = pieces[pieces.length - 1] || pieces[pieces.length - 2] || pkg;
   let match = rv.match(/^(.*?)\.(dylib|so|a)$/);
-  return match && match[1] || rv;
+  return (match && match[1]) || rv;
 }
 
+const Frame = createReactClass({
+  displayName: 'Frame',
 
-const Frame = React.createClass({
   propTypes: {
-    data: React.PropTypes.object.isRequired,
-    nextFrameInApp: React.PropTypes.bool,
-    platform: React.PropTypes.string,
-    isExpanded: React.PropTypes.bool,
-    emptySourceNotation: React.PropTypes.bool,
-    isOnlyFrame: React.PropTypes.bool,
-    timesRepeated: React.PropTypes.number,
+    data: PropTypes.object.isRequired,
+    nextFrame: PropTypes.object,
+    prevFrame: PropTypes.object,
+    platform: PropTypes.string,
+    isExpanded: PropTypes.bool,
+    emptySourceNotation: PropTypes.bool,
+    isOnlyFrame: PropTypes.bool,
+    timesRepeated: PropTypes.number,
   },
 
   mixins: [
     TooltipMixin({
       html: true,
       selector: '.tip',
-      trigger: 'hover'
-    })
+      trigger: 'hover',
+    }),
   ],
 
   getDefaultProps() {
     return {
       isExpanded: false,
-      emptySourceNotation: false
+      emptySourceNotation: false,
     };
   },
 
@@ -51,7 +55,7 @@ const Frame = React.createClass({
     // data synchronization is not important
     // https://facebook.github.io/react/tips/props-in-getInitialState-as-anti-pattern.html
     return {
-      isExpanded: this.props.isExpanded
+      isExpanded: this.props.isExpanded,
     };
   },
 
@@ -59,7 +63,7 @@ const Frame = React.createClass({
     evt && evt.preventDefault();
 
     this.setState({
-      isExpanded: !this.state.isExpanded
+      isExpanded: !this.state.isExpanded,
     });
   },
 
@@ -73,9 +77,9 @@ const Frame = React.createClass({
 
   isExpandable() {
     return (
-      (!this.props.isOnlyFrame && this.props.emptySourceNotation)
-      || this.hasContextSource()
-      || this.hasContextVars()
+      (!this.props.isOnlyFrame && this.props.emptySourceNotation) ||
+      this.hasContextSource() ||
+      this.hasContextVars()
     );
   },
 
@@ -89,10 +93,8 @@ const Frame = React.createClass({
       <strong>${sourceMapText}</strong><br/>`;
 
     // mapUrl not always present; e.g. uploaded source maps
-    if (data.mapUrl)
-      out += `${_.escape(data.mapUrl)}<br/>`;
-    else
-      out += `${_.escape(data.map)}<br/>`;
+    if (data.mapUrl) out += `${_.escape(data.mapUrl)}<br/>`;
+    else out += `${_.escape(data.map)}<br/>`;
 
     out += '</div>';
 
@@ -129,59 +131,97 @@ const Frame = React.createClass({
     if (defined(data.filename || data.module)) {
       // prioritize module name for Java as filename is often only basename
       let shouldPrioritizeModuleName = this.shouldPrioritizeModuleName();
-      let pathName = (
-        shouldPrioritizeModuleName ?
-        (data.module || data.filename) :
-        (data.filename || data.module));
+      let pathName = shouldPrioritizeModuleName
+        ? data.module || data.filename
+        : data.filename || data.module;
 
-      title.push((
+      title.push(
         <code key="filename" className="filename">
           <Truncate value={pathName} maxLength={100} leftTrim={true} />
         </code>
-      ));
+      );
 
       // in case we prioritized the module name but we also have a filename info
       // we want to show a litle (?) icon that on hover shows the actual filename
       if (shouldPrioritizeModuleName && data.filename) {
         title.push(
-          <a key="real-filename" className="in-at tip real-filename" data-title={_.escape(data.filename)}>
+          <a
+            key="real-filename"
+            className="in-at tip real-filename"
+            data-title={_.escape(data.filename)}
+          >
             <span className="icon-question" />
           </a>
         );
       }
 
       if (isUrl(data.absPath)) {
-        title.push(<a href={data.absPath} className="icon-open" key="share" target="_blank" onClick={this.preventCollapse}/>);
+        title.push(
+          <a
+            href={data.absPath}
+            className="icon-open"
+            key="share"
+            target="_blank"
+            onClick={this.preventCollapse}
+          />
+        );
       }
       if (defined(data.function)) {
-        title.push(<span className="in-at" key="in"> in </span>);
+        title.push(
+          <span className="in-at" key="in">
+            {' '}
+            in{' '}
+          </span>
+        );
       }
     }
 
     if (defined(data.function)) {
-      title.push(<code key="function" className="function">{data.function}</code>);
+      title.push(
+        <code key="function" className="function">
+          {data.function}
+        </code>
+      );
     }
 
     // we don't want to render out zero line numbers which are used to
     // indicate lack of source information for native setups.  We could
     // TODO(mitsuhiko): only do this for events from native platforms?
     if (defined(data.lineNo) && data.lineNo != 0) {
-      title.push(<span className="in-at in-at-line" key="no"> at line </span>);
-      title.push((
+      title.push(
+        <span className="in-at in-at-line" key="no">
+          {' '}
+          at line{' '}
+        </span>
+      );
+      title.push(
         <code key="line" className="lineno">
           {defined(data.colNo) ? `${data.lineNo}:${data.colNo}` : data.lineNo}
         </code>
-      ));
+      );
     }
 
     if (defined(data.package)) {
-      title.push(<span className="within" key="within"> within </span>);
-      title.push(<code title={data.package} className="package" key="package">{trimPackage(data.package)}</code>);
+      title.push(
+        <span className="within" key="within">
+          {' '}
+          within{' '}
+        </span>
+      );
+      title.push(
+        <code title={data.package} className="package" key="package">
+          {trimPackage(data.package)}
+        </code>
+      );
     }
 
     if (defined(data.origAbsPath)) {
       title.push(
-        <a key="original-src" className="in-at tip original-src" data-title={this.renderOriginalSourceInfo()}>
+        <a
+          key="original-src"
+          className="in-at tip original-src"
+          data-title={this.renderOriginalSourceInfo()}
+        >
           <span className="icon-question" />
         </a>
       );
@@ -214,18 +254,24 @@ const Frame = React.createClass({
       let startLineNo = hasContextSource ? data.context[0][0] : '';
       context = (
         <ol start={startLineNo} className={outerClassName}>
-          {defined(data.errors) &&
-          <li className={expandable ? 'expandable error' : 'error'}
-              key="errors">{data.errors.join(', ')}</li>
-          }
+          {defined(data.errors) && (
+            <li className={expandable ? 'expandable error' : 'error'} key="errors">
+              {data.errors.join(', ')}
+            </li>
+          )}
 
-          {data.context && contextLines.map((line, index) => {
-            return <ContextLine key={index} line={line} isActive={data.lineNo === line[0]} />;
-          })}
+          {data.context &&
+            contextLines.map((line, index) => {
+              return (
+                <ContextLine key={index} line={line} isActive={data.lineNo === line[0]} />
+              );
+            })}
 
-          {hasContextVars &&
-            <ClippedBox clipHeight={100}><FrameVariables data={data.vars} key="vars" /></ClippedBox>
-          }
+          {hasContextVars && (
+            <ClippedBox clipHeight={100}>
+              <FrameVariables data={data.vars} key="vars" />
+            </ClippedBox>
+          )}
         </ol>
       );
     } else if (this.props.emptySourceNotation) {
@@ -245,35 +291,63 @@ const Frame = React.createClass({
     }
     return (
       <a
+        key="expander"
         title={t('Toggle context')}
         onClick={this.toggleContext}
-        className="btn btn-sm btn-default btn-toggle">
-        <span className={this.state.isExpanded ? 'icon-minus' : 'icon-plus'}/>
+        className="btn btn-sm btn-default btn-toggle"
+      >
+        <span className={this.state.isExpanded ? 'icon-minus' : 'icon-plus'} />
       </a>
     );
   },
 
   leadsToApp() {
-    return !this.props.data.inApp && this.props.nextFrameInApp;
+    return !this.props.data.inApp && this.props.nextFrame && this.props.nextFrame.inApp;
+  },
+
+  isInlineFrame() {
+    return (
+      this.props.prevFrame &&
+      this.getPlatform() == (this.props.prevFrame.platform || this.props.platform) &&
+      this.props.data.instructionAddr == this.props.prevFrame.instructionAddr
+    );
+  },
+
+  getFrameHint() {
+    if (this.isInlineFrame()) {
+      return t('Inlined frame');
+    }
+    if (this.getPlatform() == 'cocoa') {
+      let func = this.props.data.function || '<unknown>';
+      if (func.match(/^@objc\s/)) {
+        return t('Objective-C -> Swift shim frame');
+      }
+      if (func === '<redacted>') {
+        return t('Unknown system frame. Usually from beta SDKs');
+      }
+      if (func.match(/^__?hidden#\d+/)) {
+        return t('Hidden function from bitcode build');
+      }
+    }
+    return null;
   },
 
   renderLeadHint() {
     if (this.leadsToApp() && !this.state.isExpanded) {
-      return (
-        <span className="leads-to-app-hint">
-          {'Called from: '}
-        </span>
-      );
+      return <span className="leads-to-app-hint">{'Called from: '}</span>;
     } else return null;
   },
 
   renderRepeats() {
-    if (this.props.timesRepeated > 0) {
+    let timesRepeated = this.props.timesRepeated;
+    if (timesRepeated > 0) {
       return (
-        <span className="repeated-frames"
-          title={`Frame repeated ${this.props.timesRepeated} times`}>
-            <span className="icon-refresh"/>
-            <span>{this.props.timesRepeated}</span>
+        <span
+          className="repeated-frames"
+          title={`Frame repeated ${timesRepeated} time${timesRepeated === 1 ? '' : 's'}`}
+        >
+          <span className="icon-refresh" />
+          <span>{timesRepeated}</span>
         </span>
       );
     } else return null;
@@ -291,31 +365,35 @@ const Frame = React.createClass({
     );
   },
 
-  renderCocoaLine() {
+  renderNativeLine() {
     let data = this.props.data;
+    let hint = this.getFrameHint();
     return (
       <StrictClick onClick={this.isExpandable() ? this.toggleContext : null}>
         <div className="title as-table">
           {this.renderLeadHint()}
-          {defined(data.package)
-            ? (
-              <span className="package" title={data.package}>
-                {trimPackage(data.package)}
-              </span>
-            ) : (
-              <span className="package"/>
-            )
-          }
-          <span className="address">
-            {data.instructionAddr}
-          </span>
+          {defined(data.package) ? (
+            <span className="package" title={data.package}>
+              {trimPackage(data.package)}
+            </span>
+          ) : (
+            <span className="package">{'<unknown>'}</span>
+          )}
+          <span className="address">{data.instructionAddr}</span>
           <span className="symbol">
             <code>{data.function || '<unknown>'}</code>
-            {data.instructionOffset &&
-              <span className="offset">{' + ' + data.instructionOffset}</span>}
-            {data.filename &&
-              <span className="filename">{data.filename}
-                {data.lineNo ? ':' + data.lineNo : ''}</span>}
+            {data.filename && (
+              <span className="filename">
+                {data.filename}
+                {data.lineNo ? ':' + data.lineNo : ''}
+              </span>
+            )}
+            {hint !== null ? (
+              <a key="inline" className="tip" data-title={_.escape(hint)}>
+                {' '}
+                <span className="icon-question" />
+              </a>
+            ) : null}
             {this.renderExpander()}
           </span>
         </div>
@@ -326,8 +404,11 @@ const Frame = React.createClass({
   renderLine() {
     switch (this.getPlatform()) {
       case 'objc':
+      // fallthrough
       case 'cocoa':
-        return this.renderCocoaLine();
+      // fallthrough
+      case 'native':
+        return this.renderNativeLine();
       default:
         return this.renderDefaultLine();
     }
@@ -336,15 +417,16 @@ const Frame = React.createClass({
   render() {
     let data = this.props.data;
     let className = classNames({
-      'frame': true,
+      frame: true,
       'is-expandable': this.isExpandable(),
-      'expanded': this.state.isExpanded,
-      'collapsed': !this.state.isExpanded,
+      expanded: this.state.isExpanded,
+      collapsed: !this.state.isExpanded,
       'system-frame': !data.inApp,
       'frame-errors': data.errors,
       'leads-to-app': this.leadsToApp(),
+      [this.getPlatform()]: true,
     });
-    let props = {className: className};
+    let props = {className};
 
     let context = this.renderContext();
 
@@ -354,7 +436,7 @@ const Frame = React.createClass({
         {context}
       </li>
     );
-  }
+  },
 });
 
 export default Frame;

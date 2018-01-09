@@ -10,7 +10,8 @@ from __future__ import absolute_import, print_function
 
 __all__ = ['ReleaseHook']
 
-from sentry.models import Commit, Release
+from sentry.exceptions import HookValidationError
+from sentry.models import Commit, Release, ReleaseProject
 from sentry.plugins import ReleaseHook
 from sentry.testutils import TestCase
 
@@ -24,10 +25,61 @@ class StartReleaseTest(TestCase):
         hook.start_release(version)
 
         release = Release.objects.get(
-            project=project,
+            organization_id=project.organization_id,
             version=version,
         )
-        assert release.date_started
+        assert release.organization
+        assert ReleaseProject.objects.get(release=release, project=project)
+
+    def test_bad_version(self):
+        project = self.create_project()
+        hook = ReleaseHook(project)
+
+        version = ''
+        with self.assertRaises(HookValidationError):
+            hook.start_release(version)
+
+        with self.assertRaises(HookValidationError):
+            hook.finish_release(version)
+
+        with self.assertRaises(HookValidationError):
+            hook.set_commits(version, [])
+
+        version = '.'
+        with self.assertRaises(HookValidationError):
+            hook.start_release(version)
+
+        with self.assertRaises(HookValidationError):
+            hook.finish_release(version)
+
+        with self.assertRaises(HookValidationError):
+            hook.set_commits(version, [])
+
+        version = '..'
+        with self.assertRaises(HookValidationError):
+            hook.start_release(version)
+
+        with self.assertRaises(HookValidationError):
+            hook.finish_release(version)
+
+        with self.assertRaises(HookValidationError):
+            hook.set_commits(version, [])
+
+    def test_update_release(self):
+        project = self.create_project()
+        version = 'bbee5b51f84611e4b14834363b8514c2'
+        r = Release.objects.create(organization_id=project.organization_id, version=version)
+        r.add_project(project)
+
+        hook = ReleaseHook(project)
+        hook.start_release(version)
+
+        release = Release.objects.get(
+            organization_id=project.organization_id,
+            projects=project,
+            version=version,
+        )
+        assert release.organization == project.organization
 
 
 class FinishReleaseTest(TestCase):
@@ -39,10 +91,27 @@ class FinishReleaseTest(TestCase):
         hook.finish_release(version)
 
         release = Release.objects.get(
-            project=project,
+            organization_id=project.organization_id,
             version=version,
         )
         assert release.date_released
+        assert release.organization
+        assert ReleaseProject.objects.get(release=release, project=project)
+
+    def test_update_release(self):
+        project = self.create_project()
+        version = 'bbee5b51f84611e4b14834363b8514c2'
+        r = Release.objects.create(organization_id=project.organization_id, version=version)
+        r.add_project(project)
+
+        hook = ReleaseHook(project)
+        hook.start_release(version)
+
+        release = Release.objects.get(
+            projects=project,
+            version=version,
+        )
+        assert release.organization == project.organization
 
 
 class SetCommitsTest(TestCase):
@@ -66,14 +135,16 @@ class SetCommitsTest(TestCase):
         hook.set_commits(version, data_list)
 
         release = Release.objects.get(
-            project=project,
+            projects=project,
             version=version,
         )
-        commit_list = list(Commit.objects.filter(
-            releasecommit__release=release,
-        ).select_related(
-            'author',
-        ).order_by('releasecommit__order'))
+        commit_list = list(
+            Commit.objects.filter(
+                releasecommit__release=release,
+            ).select_related(
+                'author',
+            ).order_by('releasecommit__order')
+        )
 
         assert len(commit_list) == 2
         assert commit_list[0].key == 'c7155651831549cf8a5e47889fce17eb'

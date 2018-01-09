@@ -23,8 +23,7 @@ def _get_git_revision(path):
     if not os.path.exists(os.path.join(path, '.git')):
         return None
     try:
-        revision = check_output(['git', 'rev-parse', 'HEAD'],
-                                cwd=path, env=os.environ)
+        revision = check_output(['git', 'rev-parse', 'HEAD'], cwd=path, env=os.environ)
     except Exception:
         # binary didn't exist, wasn't on path, etc
         return None
@@ -59,6 +58,10 @@ def is_docker():
     # a git based image.
     return 'SENTRY_VERSION' in os.environ or 'SENTRY_BUILD' in os.environ
 
+
 __version__ = VERSION
 __build__ = get_revision()
 __docformat__ = 'restructuredtext en'
+
+# This triggers monkey patches
+__import__('sentry.monkey')

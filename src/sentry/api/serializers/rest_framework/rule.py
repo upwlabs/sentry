@@ -38,18 +38,16 @@ class RuleNodeField(serializers.WritableField):
 
 class RuleSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=64)
-    actionMatch = serializers.ChoiceField(choices=(
-        ('all', 'all'),
-        ('any', 'any'),
-        ('none', 'none'),
-    ))
+    actionMatch = serializers.ChoiceField(
+        choices=(('all', 'all'), ('any', 'any'), ('none', 'none'), )
+    )
     actions = ListField(
         child=RuleNodeField(type='action/event'),
     )
     conditions = ListField(
         child=RuleNodeField(type='condition/event'),
     )
-    frequency = serializers.IntegerField(min_value=5, max_value=1440)
+    frequency = serializers.IntegerField(min_value=5, max_value=60 * 24 * 30)
 
     def save(self, rule):
         rule.project = self.context['project']

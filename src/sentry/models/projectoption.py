@@ -12,7 +12,7 @@ from django.core.signals import request_finished
 from django.db import models
 
 from sentry.db.models import Model, FlexibleForeignKey, sane_repr
-from sentry.db.models.fields import UnicodePickledObjectField
+from sentry.db.models.fields import EncryptedPickledObjectField
 from sentry.db.models.manager import BaseManager
 from sentry.utils.cache import cache
 
@@ -85,10 +85,7 @@ class ProjectOptionManager(BaseManager):
 
     def reload_cache(self, project_id):
         cache_key = self._make_key(project_id)
-        result = dict(
-            (i.key, i.value)
-            for i in self.filter(project=project_id)
-        )
+        result = dict((i.key, i.value) for i in self.filter(project=project_id))
         cache.set(cache_key, result)
         self.__cache[project_id] = result
         return result
@@ -116,13 +113,13 @@ class ProjectOption(Model):
 
     project = FlexibleForeignKey('sentry.Project')
     key = models.CharField(max_length=64)
-    value = UnicodePickledObjectField()
+    value = EncryptedPickledObjectField()
 
     objects = ProjectOptionManager()
 
     class Meta:
         app_label = 'sentry'
         db_table = 'sentry_projectoptions'
-        unique_together = (('project', 'key',),)
+        unique_together = (('project', 'key', ), )
 
     __repr__ = sane_repr('project_id', 'key', 'value')

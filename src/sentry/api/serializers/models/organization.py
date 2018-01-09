@@ -2,29 +2,55 @@ from __future__ import absolute_import
 
 import six
 
+from sentry import roles
 from sentry.app import quotas
 from sentry.api.serializers import Serializer, register, serialize
 from sentry.auth import access
 from sentry.models import (
-    ApiKey,
-    Organization,
-    OrganizationAccessRequest,
-    OrganizationOnboardingTask,
-    OrganizationOption,
-    Team,
-    TeamStatus
+    ApiKey, Organization, OrganizationAccessRequest, OrganizationAvatar, OrganizationOnboardingTask,
+    OrganizationOption, OrganizationStatus, Team, TeamStatus
 )
 
 
 @register(Organization)
 class OrganizationSerializer(Serializer):
+    def get_attrs(self, item_list, user):
+        avatars = {
+            a.organization_id: a
+            for a in OrganizationAvatar.objects.filter(organization__in=item_list)
+        }
+        data = {}
+        for item in item_list:
+            data[item] = {
+                'avatar': avatars.get(item.id),
+            }
+        return data
+
     def serialize(self, obj, attrs, user):
+        if attrs.get('avatar'):
+            avatar = {
+                'avatarType': attrs['avatar'].get_avatar_type_display(),
+                'avatarUuid': attrs['avatar'].ident if attrs['avatar'].file else None
+            }
+        else:
+            avatar = {
+                'avatarType': 'letter_avatar',
+                'avatarUuid': None,
+            }
+
+        status = OrganizationStatus(obj.status)
+
         return {
             'id': six.text_type(obj.id),
             'slug': obj.slug,
-            'name': obj.name,
+            'status': {
+                'id': status.name.lower(),
+                'name': status.label,
+            },
+            'name': obj.name or obj.slug,
             'dateCreated': obj.date_added,
             'isEarlyAdopter': bool(obj.flags.early_adopter),
+            'avatar': avatar,
         }
 
 
@@ -52,39 +78,74 @@ class DetailedOrganizationSerializer(OrganizationSerializer):
         for team in team_list:
             team._organization_cache = obj
 
-        onboarding_tasks = list(OrganizationOnboardingTask.objects.filter(
-            organization=obj,
-        ).select_related('user'))
+        onboarding_tasks = list(
+            OrganizationOnboardingTask.objects.filter(
+                organization=obj,
+            ).select_related('user')
+        )
 
         feature_list = []
         if features.has('organizations:sso', obj, actor=user):
             feature_list.append('sso')
-        if features.has('organizations:callsigns', obj, actor=user):
-            feature_list.append('callsigns')
         if features.has('organizations:onboarding', obj, actor=user) and \
                 not OrganizationOption.objects.filter(organization=obj).exists():
             feature_list.append('onboarding')
         if features.has('organizations:api-keys', obj, actor=user) or \
                 ApiKey.objects.filter(organization=obj).exists():
             feature_list.append('api-keys')
+        if features.has('organizations:group-unmerge', obj, actor=user):
+            feature_list.append('group-unmerge')
+        if features.has('organizations:integrations-v3', obj, actor=user):
+            feature_list.append('integrations-v3')
+        if features.has('organizations:new-settings', obj, actor=user):
+            feature_list.append('new-settings')
+        if features.has('organizations:require-2fa', obj, actor=user):
+            feature_list.append('require-2fa')
 
         if getattr(obj.flags, 'allow_joinleave'):
             feature_list.append('open-membership')
         if not getattr(obj.flags, 'disable_shared_issues'):
             feature_list.append('shared-issues')
 
-        context = super(DetailedOrganizationSerializer, self).serialize(
-            obj, attrs, user)
+        context = super(DetailedOrganizationSerializer, self).serialize(obj, attrs, user)
+        max_rate = quotas.get_maximum_quota(obj)
         context['quota'] = {
-            'maxRate': quotas.get_organization_quota(obj),
-            'projectLimit': int(OrganizationOption.objects.get_value(
-                organization=obj,
-                key='sentry:project-rate-limit',
-                default=100,
-            )),
+            'maxRate': max_rate[0],
+            'maxRateInterval': max_rate[1],
+            'accountLimit': int(
+                OrganizationOption.objects.get_value(
+                    organization=obj,
+                    key='sentry:account-rate-limit',
+                    default=0,
+                )
+            ),
+            'projectLimit': int(
+                OrganizationOption.objects.get_value(
+                    organization=obj,
+                    key='sentry:project-rate-limit',
+                    default=100,
+                )
+            ),
         }
-        context['teams'] = serialize(
-            team_list, user, TeamWithProjectsSerializer())
+
+        context.update({
+            'isDefault': obj.is_default,
+            'defaultRole': obj.default_role,
+            'availableRoles': [{
+                'id': r.id,
+                'name': r.name,
+            } for r in roles.get_all()],
+            'openMembership': bool(obj.flags.allow_joinleave),
+            'require2FA': bool(obj.flags.require_2fa),
+            'allowSharedIssues': not obj.flags.disable_shared_issues,
+            'enhancedPrivacy': bool(obj.flags.enhanced_privacy),
+            'dataScrubber': bool(obj.get_option('sentry:require_scrub_data', False)),
+            'dataScrubberDefaults': bool(obj.get_option('sentry:require_scrub_defaults', False)),
+            'sensitiveFields': obj.get_option('sentry:sensitive_fields', None) or [],
+            'safeFields': obj.get_option('sentry:safe_fields', None) or [],
+            'scrubIPAddresses': bool(obj.get_option('sentry:require_scrub_ip_address', False)),
+        })
+        context['teams'] = serialize(team_list, user, TeamWithProjectsSerializer())
         if env.request:
             context['access'] = access.from_request(env.request, obj).scopes
         else:

@@ -1,6 +1,424 @@
 Version 8.11 (Unreleased)
 -------------------------
 
+Version 8.23 (Unreleased)
+-------------------------
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Drop index on ``EventTag(project_id, key_id, value_id)``
+- Increased length of ``Release.ref`` and ``Release.version`` to 250
+
+API Changes
+~~~~~~~~~~~
+- Project plugins endpoint returns every configurable plugin, and includes additional information about each one
+
+Version 8.22
+------------
+
+- BREAKING: Members will no longer be automatically granted membership to the
+  default organization. You should use SSO or the invite flows.
+- Add support for SAML2 authentication through identity providers that
+  implement the ``SAML2AuthProvider``. See getsentry/sentry-auth-saml2.
+- BREAKING: Group share urls have all been invalidated and must be regenerated.
+- Added the ability for users to disable workflow notifications on a per-project basis.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``ProjectSymCacheFile`` model.
+- Added index on ``TagValue(project_id, key, last_seen)``
+- Add ``GroupShare`` model.
+
+API Changes
+~~~~~~~~~~~
+- Added API endpoint to list members awaiting access
+
+Version 8.21
+------------
+
+- Ignore querystrings when looking up release artifacts
+- Add Visual Studio authentication provider for plugins.
+- Add "team" parameter to the project details API.
+- Added mailing list support (via ``List-Id`` header) to digest emails.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``IdentityProvider`` model.
+- Added ``Identity`` model.
+- Added ``UserIdentity`` model.
+- Added ``ProjectTeam`` model
+
+
+Version 8.20
+------------
+- Make BitBucket repositories enabled by default
+- Add raw data toggle for Additional Data
+- Improved function name resolving for JavaScript sourcemaps
+
+- Add initial support for Redis Cluster.
+- Support a list of hosts in the ``redis.clusters`` configuration along side
+  the traditional dictionary style configuration.
+- Better support for rendering rich JSON and URL encoded HTTP bodies by
+  guessing the content type based on format heuristics.
+- Better support for sanitizing of string HTTP bodies.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added index on ``ProjectPlatform(last_seen)`` column
+- Added index on ``GroupCommitResolution.commit_id``
+- Enable ``citext`` extension in Postgres.
+- Dropped ``TagKey.project_id`` foreign key constraint
+- Dropped ``TagValue.project_id`` foreign key constraint
+- Dropped ``GroupTagKey.project_id`` foreign key constraint
+- Dropped ``GroupTagKey.group_id`` foreign key constraint
+- Dropped ``EventUser.project_id`` foreign key constraint
+- Added ``Email`` model
+- Change ``CommitFileChange.filename`` from varchar to text in PostgreSQL
+
+Version 8.19
+------------
+
+- Hide project filter when there are no projects to list.
+- Added lookup methods to constants to get a unique `integration_id` for a given
+  event, and to get information (documention url, human readable name) from that id.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``Integration``, ``OrganizationIntegration``, and ``ProjectIntegration`` models
+- Added ``Repository(integration_id)`` column
+
+Version 8.18
+------------
+
+- Expanded resolution options to allow current and explicit versions.
+- Added proguard support
+- Removed support for global dsyms.
+- Moved Queue admin page to React.
+- Replaced usage of jQuery Flot library with internal graphs.
+- Expanded ignore actions to include deltas and rates for both occurances and
+  users impacted.
+- Add a new option (`auth.allow-registration`) for determining whether registration
+  is allowed on an installation.
+- Moved "create organization" into React.
+- Expanded React Form components (Form, ApiForm).
+- Moved "create team" into React.
+- add Slack to supported auth backends in social auth (for plugins)
+- Expanded resolution actions (on stream) to include current release and explicit
+  release.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added Release.commit_count
+- Added Release.last_commit_id
+- Added Release.authors
+- Added Release.total_deploys
+- Added Release.last_deploy_id
+- Added ``FeatureAdoption`` model
+- Removed DSymBundle
+- Removed DSymObject
+- Removed DSymSDK
+- Removed DSymSymbol
+- Removed GlobalDSymFile
+- Added GroupHash.state
+- Drop index on ``ReleaseEnvironment(project_id)``
+- Drop index on ``ReleaseCommit(project_id)``
+- Drop unique constraint on ``ReleaseEnvironment(project_id, release_id, environment_id)``
+- Added GroupResolution.type
+- Added GroupResolution.actor_id
+- Added Project.platform
+- Added GroupSnooze.actor_id
+- Added ScheduledJob
+- Added GroupResolution.actor_id
+- Added ``ScheduledJob`` model
+- Added User.last_active
+
+API Changes
+~~~~~~~~~~~
+
+- Project keys endpoint will include all available keys by default. Use
+  ``status=active`` to retain the old behavior.
+
+Version 8.17
+------------
+
+- Added @mentions to comments
+- Initial (internal) analytics abstraction.
+- Turned on reprocessing by default
+- Added basics for Data Forwarding integrations.
+- Changed the grouping and default `in_app` values for cocoa events.
+- Removed global dsym support.
+- Removed support for legacy apple report format.
+- The threads interface now contributes to grouping if it contains a single thread.
+- Added per-key (DSN) rate limits (``project:rate-limits`` feature).
+- Added tsdb statistics for events per-key.
+- Added ``sentry.deletions`` abstraction to improve bulk deletions.
+- Added basic workspace for Visual Studio Code.
+- Added hovercards for Issue IDs in activity entries.
+- Added event count options to ignore.
+- Added user frequency options to ignore.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Dropped ``GroupTagValue.group_id`` foreign key constraint
+- Dropped ``GroupTagValue.project_id`` foreign key constraint
+- Added ``Deploy.notified`` column
+- Added index on ``EventTag.date_added``
+- Added unique index on ``Environment(organization_id, name)``
+- Added unique index on ``ReleaseEnvironment(organization_id, release_id, environment_id)``
+- Added ``EventUser.name`` column
+- Added ``UserReport.event_user_id`` column
+
+Version 8.16.1
+--------------
+
+- Fixed issue in migration 0302 that prevented upgrading
+
+Version 8.16
+------------
+
+- Added data migration to create UserEmail objects for users whose primary emails did not have them
+- Time series data (used by graphs and other features) is now updated when groups are merged.
+- Added distributions to the release system to better support mobile apps
+- Update activity entries to reference issues by their short ID.
+- Added user notifications settings for deploy emails.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``Distribution`` model
+- Added ``ReleaseFile.dist`` column
+- Added ``UserOption.organization`` column
+- Added ``CommitAuthor.external_id`` column
+
+API Changes
+~~~~~~~~~~~
+
+- Deprecate `dateStarted` in releases endpoints
+
+Version 8.15
+------------
+
+- Added overview for a release to view a breakdown of files changes, commit authors, new issues, and issues resolved
+- Refactor usage of ``sentry.app`` to use individual modules.
+- Implemented ``--concurrency`` on ``sentry cleanup``
+- Added support for the new symbol server system to support native SDKs better.
+- Added deploy email
+- Added OAuth2 support to the web API.
+- Simplified management of secondary email addresses.
+- Fixed an issue where changing primary email address would remove the pre-existing verified email.
+- Disallow duplicating primary emails for users moving forward.
+- Resolve issues when commits with ``Fixes SHORTID`` are included in releases
+- Added support for associating debug symbols with iTunes applications and builds.
+- Added the ability to claim unassigned issues when resolving them.
+
+API Changes
+~~~~~~~~~~~
+
+- Added CommitFileChangeEndpoint
+- Added IssuesResolvedInReleaseEndpoint
+- Added ReleaseDeploysEndpoint
+- Added OrganizationReleaseCommitsEndpoint
+- Added EventFileCommittersEndpoint
+- Added ReleaseDeploysEndpoint
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``Deploy`` model
+- Added ``ApiApplication`` model
+- Added ``ApiAuthorization`` model
+- Added ``ApiGrant`` model
+- Removed ``ApiToken.key`` column
+- Added ``ApiToken.application`` column
+- Added ``ApiToken.refresh_token`` column
+- Added ``ApiToken.expires_at`` column
+- Added ``ApiToken.scope_list`` column
+- Added ``ApiKey.scope_list`` column
+- Added ``ReleaseHeadCommit`` model
+
+Security
+~~~~~~~~
+
+- Added encryption to the following fields:
+  - AuthIdentity.data
+  - AuthProvider.config
+  - Option.value
+  - OrganizationOption.value
+  - ProjectOption.value
+  - UserOption.value
+
+Version 8.14.1
+--------------
+
+- Fixed issues related to migrations failing to finish for 8.14
+- Fixed an issue where Release version names were erronously too restrictve.
+- Fixed an issue where "New Issues" counts would have all been 0 for releases created in 8.14.
+
+Version 8.14
+------------
+
+- Added new internal processing interface that supports multiple processing steps per stacktrace (for instance JavaScript + native)
+- Add IE10 legacy browser filter
+- Added data migration to merge legacy releases
+- Added support for symbolizing inlined frames and added heuristics for fixing up native stacktraces.
+- Removed instruction_offset as a frame attribute from stacktraces
+- [BREAKING] Quotas must now instantiate RateLimited and NotRateLimited return values.
+- [BREAKING] Redis quota implementations now return BasicRedisQuota instead of tuples.
+- Commits using the ``Fixes SHORTID`` annotation will now be tracked appropriately.
+- Release functionality is now detected at a project level to enable various features.
+- Added basic encryption facilities (``sentry.utils.encryption``).
+- Added support for "Fixes XXX, YYY" and "Fixes XXX YYY" notations.
+- Added bulk "Resolve in Next Release" to stream actions.
+- Various visual improvements to notifications, including the addition of
+  transactions.
+- Plugins can now add tasks that run in sentry as celery workers.
+- Added the ability to verify TLS connections when fetching artifacts.
+- Added data migration to merge environments across an organization
+- Added ``timesSeen`` keyword to issue search.
+- Added feature signals, such as first time release tracking is enabled.
+
+API Changes
+~~~~~~~~~~~
+
+- Added OrganizationReleasesEndpoint.
+- Added context type ``app`` for cocoa events.
+- Added ``assignedTo`` param to ``/projects/{org}/{project}/issues/``.
+- Split out filtered stats onto Inbound Data Filters page
+- Added OrganizationReleasesEndpoint
+- Added OrganizationReleaseFileEndpoint
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added unique index on ``Release(organization_id, version)``
+- Removed unique index on ``Release(project_id, version)``
+- Added ``GroupCommitResolution`` model.
+- Added ``Environment.organization_id`` column.
+- Added ``EnvironmentProject`` model.
+- Added ``Project.flags`` column.
+- Added not null constraint to ``Environment.organization_id`` column.
+- Removed not null constraint on ``Environment.project_id`` and ``ReleaseEnvironment.project_id`` columns
+
+Version 8.13
+------------
+
+- Added individual filters for legacy browsers to improve customization of error filtering based on browser versions
+- Support for setting a custom security header for javascript fetching.
+- start using ReleaseProject and Release.organization instead of Release.project
+- Project quotas are no longer available, and must now be configured via the organizational rate limits.
+- Quotas implementation now requires a tuple of maximum rate and interval window.
+- Added security emails for adding and removing MFA and password changes.
+- Added the ability to download an apple compatible crash report for cocoa events.
+- Add memory and storage information for apple devices
+- The legacy API keys feature is now disabled by default.
+- Show Images Loaded section for cocoa events with version number.
+- Added registers to stacktrace for cocoa exceptions.
+- Fixed bug where workflow notification subject may not include a custom email prefix.
+- Added configurable subject templates for individual alert emails (`mail:subject_template` option).
+- Added data migration to populate ReleaseProject.new_groups
+- Moved organization settings to React.
+- Added support for managing newsletter subscriptions with Sentry.io
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``ReleaseProject.new_groups`` column.
+- Moved organization settings to React.
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``ReleaseProject.new_groups`` column.
+- Added ``OrganizationAvatar`` model.
+
+API Changes
+~~~~~~~~~~~
+
+- Added avatar and avatarType to ``/organizations/{org}/`` endpoint.
+- Provide commit and author information associated with a given release
+- Provide repository information for commits
+- Added new internal processing interface that supports multiple processing steps per stacktrace (for instance JavaScript + native)
+
+Version 8.12
+------------
+
+- Fix bug where some users would incorrectly not receive workflow notifications for projects they were subscribed to.
+- restructured dSYM processing.  It now records errors in the symbolication process
+  more accurately and will report system errors them to the internal logger.
+- Added data migration to backfill legacy release data
+- Added data migration to backfill legacy commit data
+- Added data migration to backfill legacy release file and environment data
+- Allow gziped/deflated JavaScript artifacts to be uploaded through the API.
+- Shared issue view no longer shows SDK.
+- Added ``activeSince`` to search (uses ``active_at``).
+- Added ``firstSeen`` to search (uses ``first_seen``).
+- Added ``lastSeen`` to search (uses ``last_seen``).
+- Added ``firstRelease`` to search (uses ``first_release``).
+- Fixed usage (and propagation) of ``Group.first_release``.
+- The + and - datetime search helpers now work with ranges (e.g. ``<=``).
+- Added the ability to download artifacts from releases.
+
+SDKs
+~~~~
+
+- The `repos` interface has been added.
+
+Schema Changes
+~~~~~~~~~~~~~~
+- Added ``Release.organization`` column.
+- Added ``ReleaseProject`` model.
+- Added ``ReleaseCommit.organization_id`` column.
+- Added ``ReleaseFile.organization`` column.
+- Added ``ReleaseEnvironment.organization_id`` column.
+
+Version 8.11
+------------
+
+- Ignore a ``null`` ``Origin`` header for authentication.
+- Added the ability to search for issues that you are subscribed to from the stream view.
+- Added the ability to search issues by their last seen timestamp.
+- Improved UI for password and API key fields used in integrations
+- Fixed bug where API responses would include incorrect `isSubscribed` values for issues.
+- Added support for switching to unsymbolicated tracebacks in cocoa.
+- Invalidate user sessions when changing password and 2fa settings.
+- Add configurable password validators to enforce password strength.
+- Send email to specific email when adding a new email rather than sending to all unverified email addresses.
+- Allow user to resend email verification to primary email address.
+- Added additional detail to subscription help text when viewing a group.
+- Add Asana to supported auth backends in social auth (for plugins)
+- Cleaner install UI when creating a new project.
+- Added support for recording symbols separately in frames independent of the function.
+- Reduce noisy Postgres logs from inserting duplicate onboarding rows.
+- Added device icons for Apple Watch and Apple TV
+- Added export action to group tag details.
+- Improved display of user tags.
+- Added 'transaction' tag which automatically populates from explicit culprits.
+- Added beginnings of repository management to UI (behind `organizations:repos` feature).
+
+Schema Changes
+~~~~~~~~~~~~~~
+
+- Added ``User.session_nonce`` column.
+- Added ``CommitFileChange`` model.
+- Added ``Repository.url`` column.
+- Added ``Repository.provider`` column.
+- Added ``Repository.config`` column.
+- Added ``Repository.external_id`` column.
+- Added ``Repository.status`` column.
+
+API Changes
+~~~~~~~~~~~
+
+- Added ``/organizations/{org}/config/repos/`` endpoint.
+- Added ``/organizations/{org}/repos/{repo}/`` endpoint.
+
 Version 8.10
 ------------
 
@@ -20,8 +438,8 @@ Version 8.10
 API Changes
 ~~~~~~~~~~~
 
-- Add ``/organizations/{org}/repositories/`` endpoint.
-- Add ``/organizations/{org}/repositories/{repo}/commits/`` endpoint.
+- Add ``/organizations/{org}/repos/`` endpoint.
+- Add ``/organizations/{org}/repos/{repo}/commits/`` endpoint.
 - Add ``/projects/{org}/{project}/releases/{version}/commits/`` endpoint.
 - SSO restrictions are now applied across session-based API authentication.
 

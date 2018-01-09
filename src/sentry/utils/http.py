@@ -7,15 +7,15 @@ sentry.utils.http
 """
 from __future__ import absolute_import
 
-import ipaddress
 import six
 
 from collections import namedtuple
 from django.conf import settings
-from six.moves.urllib.parse import urlencode, urljoin, urlparse
+from six.moves.urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from functools import partial
 
 from sentry import options
-
+from sentry.utils import json
 
 ParsedUriMatch = namedtuple('ParsedUriMatch', ['scheme', 'domain', 'path'])
 
@@ -24,6 +24,13 @@ def absolute_uri(url=None):
     if not url:
         return options.get('system.url-prefix')
     return urljoin(options.get('system.url-prefix').rstrip('/') + '/', url.lstrip('/'))
+
+
+def origin_from_url(url):
+    if not url:
+        return url
+    url = urlparse(url)
+    return '%s://%s' % (url.scheme, url.netloc)
 
 
 def safe_urlencode(params, doseq=0):
@@ -79,7 +86,7 @@ def get_origins(project=None):
 
     # lowercase and strip the trailing slash from all origin values
     # filter out empty values
-    return frozenset(filter(bool, map(lambda x: x.lower().rstrip('/'), result)))
+    return frozenset(filter(bool, map(lambda x: (x or '').lower().rstrip('/'), result)))
 
 
 def parse_uri_match(value):
@@ -121,6 +128,7 @@ def is_valid_origin(origin, project=None, allowed=None):
     - *: allow any domain
     - *.domain.com: matches domain.com and all subdomains, on any port
     - domain.com: matches domain.com on any port
+    - *:port: wildcard on hostname, but explicit match on port
     """
     if allowed is None:
         allowed = get_origins(project)
@@ -151,20 +159,26 @@ def is_valid_origin(origin, project=None, allowed=None):
 
     parsed = urlparse(origin)
 
-    # There is no hostname, so the header is probably invalid
     if parsed.hostname is None:
-        return False
-
-    try:
-        parsed_hostname = parsed.hostname.encode('idna')
-    except UnicodeError:
-        # We sometimes shove in some garbage input here, so just opting to ignore and carry on
-        parsed_hostname = parsed.hostname
+        parsed_hostname = ''
+    else:
+        try:
+            parsed_hostname = parsed.hostname.encode('idna')
+        except UnicodeError:
+            # We sometimes shove in some garbage input here, so just opting to ignore and carry on
+            parsed_hostname = parsed.hostname
 
     if parsed.port:
-        parsed_netloc = '%s:%d' % (parsed_hostname, parsed.port)
+        domain_matches = (
+            '*',
+            parsed_hostname,
+            # Explicit hostname + port name
+            '%s:%d' % (parsed_hostname, parsed.port),
+            # Wildcard hostname with explicit port
+            '*:%d' % parsed.port,
+        )
     else:
-        parsed_netloc = parsed_hostname
+        domain_matches = ('*', parsed_hostname)
 
     for value in allowed:
         try:
@@ -182,7 +196,7 @@ def is_valid_origin(origin, project=None, allowed=None):
             if parsed_hostname.endswith(bits.domain[1:]) or parsed_hostname == bits.domain[2:]:
                 return True
             continue
-        elif bits.domain not in ('*', parsed_hostname, parsed_netloc):
+        elif bits.domain not in domain_matches:
             continue
 
         # path supports exact, any, and suffix match (with or without *)
@@ -196,22 +210,49 @@ def is_valid_origin(origin, project=None, allowed=None):
     return False
 
 
-def is_valid_ip(ip_address, project):
+def origin_from_request(request):
     """
-    Verify that an IP address is not being blacklisted
-    for the given project.
+    Returns either the Origin or Referer value from the request headers,
+    ignoring "null" Origins.
     """
-    blacklist = project.get_option('sentry:blacklisted_ips')
-    if not blacklist:
-        return True
+    rv = request.META.get('HTTP_ORIGIN', 'null')
+    # In some situation, an Origin header may be the literal value
+    # "null". This means that the Origin header was stripped for
+    # privacy reasons, but we should ignore this value entirely.
+    # Behavior is specified in RFC6454. In either case, we should
+    # treat a "null" Origin as a nonexistent one and fallback to Referer.
+    if rv in ('', 'null'):
+        rv = origin_from_url(request.META.get('HTTP_REFERER'))
+    return rv
 
-    for addr in blacklist:
-        # We want to error fast if it's an exact match
-        if ip_address == addr:
-            return False
 
-        # Check to make sure it's actually a range before
-        if '/' in addr and ipaddress.ip_address(six.text_type(ip_address)) in ipaddress.ip_network(six.text_type(addr), strict=False):
-            return False
+def heuristic_decode(data, possible_content_type=None):
+    """
+    Attempt to decode a HTTP body by trying JSON and Form URL decoders,
+    returning the decoded body (if decoding was successful) and the inferred
+    content type.
+    """
+    inferred_content_type = possible_content_type
 
-    return True
+    form_encoded_parser = partial(
+        parse_qs,
+        strict_parsing=True,
+        keep_blank_values=True,
+    )
+
+    decoders = [
+        ('application/x-www-form-urlencoded', form_encoded_parser),
+        ('application/json', json.loads),
+    ]
+
+    # Prioritize the decoder which supports the possible content type first.
+    decoders.sort(key=lambda d: d[0] == possible_content_type, reverse=True)
+
+    for decoding_type, decoder in decoders:
+        try:
+            return (decoder(data), decoding_type)
+        except Exception:
+            # Try another decoder
+            continue
+
+    return (data, inferred_content_type)

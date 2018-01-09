@@ -8,24 +8,24 @@ sentry.plugins.bases.notify
 from __future__ import absolute_import, print_function
 
 import logging
-import six
+from six.moves.urllib.parse import (
+    urlparse,
+    urlencode,
+    urlunparse,
+    parse_qs,
+)
 
 from django import forms
 
-from sentry.app import (
-    digests,
-    ratelimiter,
-)
+from sentry import digests, ratelimits
 from sentry.digests import get_option_key as get_digest_option_key
 from sentry.digests.notifications import (
     event_to_record,
     unsplit_key,
 )
 from sentry.plugins import Notification, Plugin
-from sentry.models import (
-    ProjectOption,
-    UserOption,
-)
+from sentry.plugins.base.configuration import react_plugin_config
+from sentry.models import ProjectOption
 from sentry.tasks.digests import deliver_digest
 
 
@@ -50,10 +50,16 @@ class BaseNotificationUserOptionsForm(forms.Form):
 
 
 class NotificationPlugin(Plugin):
-    description = ('Notify project members when a new event is seen for the first time, or when an '
-                   'already resolved event has changed back to unresolved.')
+    slug = ''
+    description = (
+        'Notify project members when a new event is seen for the first time, or when an '
+        'already resolved event has changed back to unresolved.'
+    )
     # site_conf_form = NotificationConfigurationForm
     project_conf_form = NotificationConfigurationForm
+
+    def configure(self, project, request):
+        return react_plugin_config(self, project, request)
 
     def get_plugin_type(self):
         return 'notification'
@@ -75,15 +81,20 @@ class NotificationPlugin(Plugin):
             extra['rule_id'] = future.rule.id
             if not future.kwargs:
                 continue
-            raise NotImplementedError('The default behavior for notification de-duplication does not support args')
+            raise NotImplementedError(
+                'The default behavior for notification de-duplication does not support args'
+            )
 
         project = event.group.project
         extra['project_id'] = project.id
         if hasattr(self, 'notify_digest') and digests.enabled(project):
-            get_digest_option = lambda key: ProjectOption.objects.get_value(
-                project,
-                get_digest_option_key(self.get_conf_key(), key),
-            )
+
+            def get_digest_option(key):
+                return ProjectOption.objects.get_value(
+                    project,
+                    get_digest_option_key(self.get_conf_key(), key),
+                )
+
             digest_key = unsplit_key(self, event.group.project)
             extra['digest_key'] = digest_key
             immediate_delivery = digests.add(
@@ -117,36 +128,11 @@ class NotificationPlugin(Plugin):
         Return a collection of user IDs that are eligible to receive
         notifications for the provided project.
         """
-        conf_key = self.get_conf_key()
-
-        alert_settings = dict(
-            (o.user_id, int(o.value))
-            for o in UserOption.objects.filter(
-                project=project,
-                key='%s:alert' % conf_key,
-            )
-        )
-
-        disabled = set(u for u, v in six.iteritems(alert_settings) if v == 0)
-
-        member_set = set(project.member_set.exclude(
-            user__in=disabled,
-        ).values_list('user', flat=True))
-
-        # determine members default settings
-        members_to_check = set(u for u in member_set if u not in alert_settings)
-        if members_to_check:
-            disabled = set(UserOption.objects.filter(
-                key='subscribe_by_default',
-                value='0',
-                user__in=members_to_check,
-            ).values_list('user', flat=True))
-            member_set = [x for x in member_set if x not in disabled]
-
-        return member_set
+        user_option = '%s:alert' % self.get_conf_key()
+        return project.get_notification_recipients(user_option)
 
     def __is_rate_limited(self, group, event):
-        return ratelimiter.is_limited(
+        return ratelimits.is_limited(
             project=group.project,
             key=self.get_conf_key(),
             limit=10,
@@ -166,7 +152,8 @@ class NotificationPlugin(Plugin):
         # If the plugin doesn't support digests or they are not enabled,
         # perform rate limit checks to support backwards compatibility with
         # older plugins.
-        if not (hasattr(self, 'notify_digest') and digests.enabled(project)) and self.__is_rate_limited(group, event):
+        if not (hasattr(self, 'notify_digest') and
+                digests.enabled(project)) and self.__is_rate_limited(group, event):
             logger = logging.getLogger('sentry.plugins.{0}'.format(self.get_conf_key()))
             logger.info('notification.rate_limited', extra={'project_id': project.id})
             return False
@@ -181,6 +168,18 @@ class NotificationPlugin(Plugin):
 
     def get_notification_doc_html(self, **kwargs):
         return ""
+
+    def add_notification_referrer_param(self, url):
+        if self.slug:
+            parsed_url = urlparse(url)
+            query = parse_qs(parsed_url.query)
+            query['referrer'] = self.slug
+
+            url_list = list(parsed_url)
+            url_list[4] = urlencode(query, doseq=True)
+            return urlunparse(url_list)
+
+        return url
 
 
 # Backwards-compatibility

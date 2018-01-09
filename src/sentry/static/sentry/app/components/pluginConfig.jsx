@@ -1,33 +1,38 @@
+import PropTypes from 'prop-types';
 import React from 'react';
-import _ from 'underscore';
+import createReactClass from 'create-react-class';
+import _ from 'lodash';
 
+import {disablePlugin} from '../actionCreators/plugins';
+import {t} from '../locale';
 import ApiMixin from '../mixins/apiMixin';
 import IndicatorStore from '../stores/indicatorStore';
 import LoadingIndicator from '../components/loadingIndicator';
 import plugins from '../plugins';
-import {t} from '../locale';
 
-const PluginConfig = React.createClass({
+const PluginConfig = createReactClass({
+  displayName: 'PluginConfig',
+
   propTypes: {
-    organization: React.PropTypes.object.isRequired,
-    project: React.PropTypes.object.isRequired,
-    data: React.PropTypes.object.isRequired,
-    onDisablePlugin: React.PropTypes.func,
+    organization: PropTypes.object.isRequired,
+    project: PropTypes.object.isRequired,
+    data: PropTypes.object.isRequired,
+    onDisablePlugin: PropTypes.func,
+    enabled: PropTypes.bool,
   },
 
   mixins: [ApiMixin],
 
   getDefaultProps() {
     return {
-      onDisablePlugin: () => {
-        window.location.reload();
-      },
+      onDisablePlugin: () => {},
     };
   },
 
   getInitialState() {
     return {
-      loading: !plugins.isLoaded(this.props.data)
+      loading: !plugins.isLoaded(this.props.data),
+      testResults: '',
     };
   },
 
@@ -36,81 +41,116 @@ const PluginConfig = React.createClass({
   },
 
   componentWillReceiveProps(nextProps) {
-    if (!_.isEqual(nextProps.data, this.props.data)) {
-      this.loadPlugin(nextProps.data);
-    }
+    this.loadPlugin(nextProps.data);
   },
 
   shouldComponentUpdate(nextProps, nextState) {
     return (
-      !_.isEqual(nextState, this.state) ||
-      !_.isEqual(nextProps.data, this.props.data)
+      !_.isEqual(nextState, this.state) || !_.isEqual(nextProps.data, this.props.data)
     );
   },
 
   loadPlugin(data) {
-    if (plugins.isLoaded(data))
-      return;
-
-    this.setState({
-      loading: true,
-    }, () => {
-      plugins.load(data, () => {
-        this.setState({loading: false});
-      });
-    });
+    this.setState(
+      {
+        loading: true,
+      },
+      () => {
+        plugins.load(data, () => {
+          this.setState({loading: false});
+        });
+      }
+    );
   },
 
   getPluginEndpoint() {
     let {organization, project, data} = this.props;
-    return (
-      `/projects/${organization.slug}/${project.slug}/plugins/${data.id}/`
-    );
+    return `/projects/${organization.slug}/${project.slug}/plugins/${data.id}/`;
   },
 
   disablePlugin() {
-    let loadingIndicator = IndicatorStore.add(t('Saving changes..'));
+    let {organization, project, data} = this.props;
+    disablePlugin({projectId: project.slug, orgId: organization.slug, pluginId: data.id});
+
+    this.props.onDisablePlugin(this.props.data);
+  },
+
+  testPlugin() {
+    let loadingIndicator = IndicatorStore.add(t('Sending test..'));
     this.api.request(this.getPluginEndpoint(), {
-      method: 'DELETE',
-      success: () => {
-        this.props.onDisablePlugin();
-        IndicatorStore.remove(loadingIndicator);
+      method: 'POST',
+      data: {
+        test: true,
       },
-      error: (error) => {
-        IndicatorStore.add(t('Unable to disable plugin. Please try again.'), 'error');
-      }
+      success: data => {
+        this.setState({testResults: JSON.stringify(data.detail)});
+        IndicatorStore.remove(loadingIndicator);
+        IndicatorStore.add(t('Test Complete!'), 'success');
+      },
+      error: error => {
+        IndicatorStore.add(
+          t('An unexpected error occurred while testing your plugin. Please try again.'),
+          'error'
+        );
+      },
     });
   },
 
-  render() {
-    let data = this.props.data;
+  createMarkup() {
+    return {__html: this.props.data.doc};
+  },
 
-            // <button className="btn btn-sm btn-default pull-right"
-            //         onClick={this.disablePlugin.bind(this, data)}>{t('Disable')}</button>}
+  render() {
+    let {data} = this.props;
+    // If passed via props, use that value instead of from `data`
+    let enabled =
+      typeof this.props.enabled !== 'undefined' ? this.props.enabled : data.enabled;
+
     return (
       <div className={`box ref-plugin-config-${data.id}`}>
         <div className="box-header">
-          {data.canDisable && data.enabled &&
-            <div className="pull-right">
-              <a className="btn btn-sm btn-default"
-                 onClick={this.disablePlugin}>{t('Disable')}</a>
-            </div>
-          }
+          {data.canDisable &&
+            enabled && (
+              <div className="pull-right">
+                {data.isTestable && (
+                  <a onClick={this.testPlugin} className="btn btn-sm btn-default">
+                    {t('Test Plugin')}
+                  </a>
+                )}
+                <a className="btn btn-sm btn-default" onClick={this.disablePlugin}>
+                  {t('Disable')}
+                </a>
+              </div>
+            )}
           <h3>{data.name}</h3>
         </div>
         <div className="box-content with-padding">
-          {this.state.loading ?
+          {data.status === 'beta' ? (
+            <div className="alert alert-block alert-warning">
+              <strong>
+                {t('Note: This plugin is considered beta and may change in the future.')}
+              </strong>
+            </div>
+          ) : null}
+          {this.state.testResults != '' ? (
+            <div className="alert alert-block alert-warning">
+              <strong>Test Results: </strong>
+              <p>{this.state.testResults}</p>
+            </div>
+          ) : null}
+          <div dangerouslySetInnerHTML={this.createMarkup()} />
+          {this.state.loading ? (
             <LoadingIndicator />
-          :
+          ) : (
             plugins.get(data).renderSettings({
               organization: this.props.organization,
               project: this.props.project,
             })
-          }
+          )}
         </div>
       </div>
     );
-  }
+  },
 });
 
 export default PluginConfig;

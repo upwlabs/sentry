@@ -1,36 +1,45 @@
 from __future__ import absolute_import, print_function
 
-from django.conf import settings
 from ua_parser.user_agent_parser import Parse
 
-from sentry.models import Project
 from sentry.plugins import Plugin2
-from sentry.utils import metrics
+from sentry.stacktraces import find_stacktraces_in_data
 
-from .processor import SourceProcessor
+from .processor import JavaScriptStacktraceProcessor
 from .errormapping import rewrite_exception
+from .errorlocale import translate_exception
 
 
 def preprocess_event(data):
-    if settings.SENTRY_SCRAPE_JAVASCRIPT_CONTEXT:
-        project = Project.objects.get_from_cache(
-            id=data['project'],
-        )
-
-        allow_scraping = bool(project.get_option('sentry:scrape_javascript', True))
-
-        processor = SourceProcessor(
-            project=project,
-            allow_scraping=allow_scraping,
-        )
-        with metrics.timer('sourcemaps.process', instance=project.id):
-            processor.process(data)
-
     rewrite_exception(data)
-
-    inject_device_data(data)
-
+    translate_exception(data)
+    fix_culprit(data)
+    if data.get('platform') == 'javascript':
+        inject_device_data(data)
+    generate_modules(data)
     return data
+
+
+def generate_modules(data):
+    from sentry.lang.javascript.processor import generate_module
+
+    for info in find_stacktraces_in_data(data):
+        for frame in info.stacktrace['frames']:
+            platform = frame.get('platform') or data['platform']
+            if platform not in ('javascript', 'node') or frame.get('module'):
+                continue
+            abs_path = frame.get('abs_path')
+            if abs_path and abs_path.startswith(('http:', 'https:', 'webpack:', 'app:')):
+                frame['module'] = generate_module(abs_path)
+
+
+def fix_culprit(data):
+    exc = data.get('sentry.interfaces.Exception')
+    if not exc:
+        return
+
+    from sentry.event_manager import generate_culprit
+    data['culprit'] = generate_culprit(data)
 
 
 def parse_user_agent(data):
@@ -53,11 +62,13 @@ def parse_user_agent(data):
 
 
 def _get_version(user_agent):
-    return '.'.join(value for value in [
-        user_agent['major'],
-        user_agent['minor'],
-        user_agent.get('patch'),
-    ] if value) or None
+    return '.'.join(
+        value for value in [
+            user_agent['major'],
+            user_agent['minor'],
+            user_agent.get('patch'),
+        ] if value
+    ) or None
 
 
 def inject_browser_context(data, user_agent):
@@ -119,6 +130,12 @@ class JavascriptPlugin(Plugin2):
         return False
 
     def get_event_preprocessors(self, data, **kwargs):
-        if data.get('platform') == 'javascript':
+        # XXX: rewrite_exception we probably also want if the event
+        # platform is something else? unsure
+        if data.get('platform') in ('javascript', 'node'):
             return [preprocess_event]
         return []
+
+    def get_stacktrace_processors(self, data, stacktrace_infos, platforms, **kwargs):
+        if 'javascript' in platforms or 'node' in platforms:
+            return [JavaScriptStacktraceProcessor]

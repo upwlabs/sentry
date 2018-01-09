@@ -5,7 +5,7 @@ import six
 from django.core.urlresolvers import reverse
 from exam import fixture
 
-from sentry.models import Organization
+from sentry.models import Organization, OrganizationStatus
 from sentry.testutils import APITestCase
 
 
@@ -22,6 +22,20 @@ class OrganizationsListTest(APITestCase):
         assert len(response.data) == 1
         assert response.data[0]['id'] == six.text_type(org.id)
 
+    def test_status_query(self):
+        org = self.create_organization(owner=self.user, status=OrganizationStatus.PENDING_DELETION)
+        self.login_as(user=self.user)
+        response = self.client.get('{}?query=status:pending_deletion'.format(self.path))
+        assert response.status_code == 200
+        assert len(response.data) == 1
+        assert response.data[0]['id'] == six.text_type(org.id)
+        response = self.client.get('{}?query=status:deletion_in_progress'.format(self.path))
+        assert response.status_code == 200
+        assert len(response.data) == 0
+        response = self.client.get('{}?query=status:invalid_status'.format(self.path))
+        assert response.status_code == 200
+        assert len(response.data) == 0
+
 
 class OrganizationsCreateTest(APITestCase):
     @fixture
@@ -36,27 +50,33 @@ class OrganizationsCreateTest(APITestCase):
     def test_valid_params(self):
         self.login_as(user=self.user)
 
-        resp = self.client.post(self.path, data={
-            'name': 'hello world',
-            'slug': 'foobar',
-        })
+        resp = self.client.post(
+            self.path, data={
+                'name': 'hello world',
+                'slug': 'foobar',
+            }
+        )
         assert resp.status_code == 201, resp.content
         org = Organization.objects.get(id=resp.data['id'])
         assert org.name == 'hello world'
         assert org.slug == 'foobar'
 
-        resp = self.client.post(self.path, data={
-            'name': 'hello world',
-            'slug': 'foobar',
-        })
+        resp = self.client.post(
+            self.path, data={
+                'name': 'hello world',
+                'slug': 'foobar',
+            }
+        )
         assert resp.status_code == 409, resp.content
 
     def test_without_slug(self):
         self.login_as(user=self.user)
 
-        resp = self.client.post(self.path, data={
-            'name': 'hello world',
-        })
+        resp = self.client.post(
+            self.path, data={
+                'name': 'hello world',
+            }
+        )
         assert resp.status_code == 201, resp.content
         org = Organization.objects.get(id=resp.data['id'])
         assert org.slug == 'hello-world'

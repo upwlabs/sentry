@@ -33,35 +33,57 @@ class User(BaseModel, AbstractBaseUser):
     username = models.CharField(_('username'), max_length=128, unique=True)
     # this column is called first_name for legacy reasons, but it is the entire
     # display name
-    name = models.CharField(_('name'), max_length=200, blank=True,
-                            db_column='first_name')
+    name = models.CharField(_('name'), max_length=200, blank=True, db_column='first_name')
     email = models.EmailField(_('email address'), blank=True)
     is_staff = models.BooleanField(
-        _('staff status'), default=False,
+        _('staff status'),
+        default=False,
         help_text=_('Designates whether the user can log into this admin '
-                    'site.'))
+                    'site.')
+    )
     is_active = models.BooleanField(
-        _('active'), default=True,
-        help_text=_('Designates whether this user should be treated as '
-                    'active. Unselect this instead of deleting accounts.'))
+        _('active'),
+        default=True,
+        help_text=_(
+            'Designates whether this user should be treated as '
+            'active. Unselect this instead of deleting accounts.'
+        )
+    )
     is_superuser = models.BooleanField(
-        _('superuser status'), default=False,
-        help_text=_('Designates that this user has all permissions without '
-                    'explicitly assigning them.'))
+        _('superuser status'),
+        default=False,
+        help_text=_(
+            'Designates that this user has all permissions without '
+            'explicitly assigning them.'
+        )
+    )
     is_managed = models.BooleanField(
-        _('managed'), default=False,
-        help_text=_('Designates whether this user should be treated as '
-                    'managed. Select this to disallow the user from '
-                    'modifying their account (username, password, etc).'))
+        _('managed'),
+        default=False,
+        help_text=_(
+            'Designates whether this user should be treated as '
+            'managed. Select this to disallow the user from '
+            'modifying their account (username, password, etc).'
+        )
+    )
     is_password_expired = models.BooleanField(
-        _('password expired'), default=False,
-        help_text=_('If set to true then the user needs to change the '
-                    'password on next sign in.'))
+        _('password expired'),
+        default=False,
+        help_text=_(
+            'If set to true then the user needs to change the '
+            'password on next sign in.'
+        )
+    )
     last_password_change = models.DateTimeField(
-        _('date of last password change'), null=True,
-        help_text=_('The date the password was changed last.'))
+        _('date of last password change'),
+        null=True,
+        help_text=_('The date the password was changed last.')
+    )
+
+    session_nonce = models.CharField(max_length=12, null=True)
 
     date_joined = models.DateTimeField(_('date joined'), default=timezone.now)
+    last_active = models.DateTimeField(_('last active'), default=timezone.now, null=True)
 
     objects = UserManager(cache_fields=['pk'])
 
@@ -116,53 +138,66 @@ class User(BaseModel, AbstractBaseUser):
     def get_short_name(self):
         return self.username
 
+    def get_salutation_name(self):
+        name = self.name or self.username.split('@', 1)[0].split('.', 1)[0]
+        first_name = name.split(' ', 1)[0]
+        return first_name.capitalize()
+
     def get_avatar_type(self):
         avatar = self.avatar.first()
         if avatar:
             return avatar.get_avatar_type_display()
         return 'letter_avatar'
 
-    def send_confirm_emails(self, is_new_user=False):
+    def send_confirm_email_singular(self, email, is_new_user=False):
         from sentry import options
         from sentry.utils.email import MessageBuilder
 
+        if not email.hash_is_valid():
+            email.set_hash()
+            email.save()
+
+        context = {
+            'user':
+            self,
+            'url':
+            absolute_uri(
+                reverse('sentry-account-confirm-email', args=[self.id, email.validation_hash])
+            ),
+            'confirm_email':
+            email.email,
+            'is_new_user':
+            is_new_user,
+        }
+        msg = MessageBuilder(
+            subject='%sConfirm Email' % (options.get('mail.subject-prefix'), ),
+            template='sentry/emails/confirm_email.txt',
+            html_template='sentry/emails/confirm_email.html',
+            type='user.confirm_email',
+            context=context,
+        )
+        msg.send_async([email.email])
+
+    def send_confirm_emails(self, is_new_user=False):
         email_list = self.get_unverified_emails()
         for email in email_list:
-            if not email.hash_is_valid():
-                email.set_hash()
-                email.save()
-
-            context = {
-                'user': self,
-                'url': absolute_uri(reverse(
-                    'sentry-account-confirm-email',
-                    args=[self.id, email.validation_hash]
-                )),
-                'confirm_email': email.email,
-                'is_new_user': is_new_user,
-            }
-            msg = MessageBuilder(
-                subject='%sConfirm Email' % (options.get('mail.subject-prefix'),),
-                template='sentry/emails/confirm_email.txt',
-                html_template='sentry/emails/confirm_email.html',
-                type='user.confirm_email',
-                context=context,
-            )
-            msg.send_async([email.email])
+            self.send_confirm_email_singular(email, is_new_user)
 
     def merge_to(from_user, to_user):
         # TODO: we could discover relations automatically and make this useful
         from sentry import roles
         from sentry.models import (
-            AuditLogEntry, Activity, AuthIdentity, GroupAssignee, GroupBookmark,
-            GroupSeen, OrganizationMember, OrganizationMemberTeam, UserAvatar,
-            UserEmail, UserOption
+            Activity, AuditLogEntry, AuthIdentity, Authenticator, GroupAssignee, GroupBookmark, GroupSeen,
+            GroupShare, GroupSubscription, OrganizationMember, OrganizationMemberTeam, UserAvatar,
+            UserEmail, UserOption,
         )
 
-        audit_logger.info('user.merge', extra={
-            'from_user_id': from_user.id,
-            'to_user_id': to_user.id,
-        })
+        audit_logger.info(
+            'user.merge', extra={
+                'from_user_id': from_user.id,
+                'to_user_id': to_user.id,
+            }
+        )
 
         for obj in OrganizationMember.objects.filter(user=from_user):
             try:
@@ -190,12 +225,8 @@ class User(BaseModel, AbstractBaseUser):
                     pass
 
         model_list = (
-            GroupAssignee,
-            GroupBookmark,
-            GroupSeen,
-            UserAvatar,
-            UserEmail,
-            UserOption
+            Authenticator, GroupAssignee, GroupBookmark, GroupSeen, GroupShare,
+            GroupSubscription, UserAvatar, UserEmail, UserOption,
         )
 
         for model in model_list:
@@ -233,10 +264,14 @@ class User(BaseModel, AbstractBaseUser):
         self.last_password_change = timezone.now()
         self.is_password_expired = False
 
+    def refresh_session_nonce(self, request=None):
+        from django.utils.crypto import get_random_string
+        self.session_nonce = get_random_string(12)
+        if request is not None:
+            request.session['_nonce'] = self.session_nonce
+
     def get_orgs(self):
-        from sentry.models import (
-            Organization, OrganizationMember, OrganizationStatus
-        )
+        from sentry.models import (Organization, OrganizationMember, OrganizationStatus)
         return Organization.objects.filter(
             status=OrganizationStatus.VISIBLE,
             id__in=OrganizationMember.objects.filter(

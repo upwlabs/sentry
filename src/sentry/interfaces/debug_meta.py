@@ -1,10 +1,13 @@
 from __future__ import absolute_import
 
-__all__ = ('DebugMeta',)
+import six
+import uuid
+
+__all__ = ('DebugMeta', )
 
 from sentry.interfaces.base import Interface, InterfaceValidationError
-from sentry.utils.native import parse_addr
 
+from symbolic import parse_addr
 
 image_types = {}
 
@@ -13,6 +16,7 @@ def imagetype(name):
     def decorator(f):
         image_types[name] = f
         return f
+
     return decorator
 
 
@@ -20,19 +24,37 @@ def imagetype(name):
 def process_apple_image(image):
     def _addr(x):
         return '0x%x' % parse_addr(x)
+
     try:
-        return {
-            'cpu_type': image['cpu_type'],
-            'cpu_subtype': image['cpu_subtype'],
-            'image_addr': _addr(image['image_addr']),
+        apple_image = {
+            'arch': image.get('arch'),
+            'cpu_type': image.get('cpu_type'),
+            'cpu_subtype': image.get('cpu_subtype'),
+            'image_addr': _addr(image.get('image_addr')),
             'image_size': image['image_size'],
             'image_vmaddr': _addr(image.get('image_vmaddr') or 0),
-            'name': image['name'],
-            'uuid': image['uuid'],
+            'name': image.get('name'),
+            'uuid': six.text_type(uuid.UUID(image['uuid']))
+        }
+        if image.get('major_version') is not None:
+            apple_image['major_version'] = image['major_version']
+        if image.get('minor_version') is not None:
+            apple_image['minor_version'] = image['minor_version']
+        if image.get('revision_version') is not None:
+            apple_image['revision_version'] = image['revision_version']
+        return apple_image
+    except KeyError as e:
+        raise InterfaceValidationError('Missing value for apple image: %s' % e.args[0])
+
+
+@imagetype('proguard')
+def process_proguard_image(image):
+    try:
+        return {
+            'uuid': six.text_type(uuid.UUID(image['uuid'])),
         }
     except KeyError as e:
-        raise InterfaceValidationError('Missing value for apple image: %s'
-                                       % e.args[0])
+        raise InterfaceValidationError('Missing value for proguard image: %s' % e.args[0])
 
 
 class DebugMeta(Interface):
@@ -49,15 +71,20 @@ class DebugMeta(Interface):
         a list of debug images and their mappings.
     """
 
-    ephemeral = True
+    ephemeral = False
 
     @classmethod
     def to_python(cls, data):
         if 'images' not in data:
             raise InterfaceValidationError('Missing key "images"')
+        is_debug_build = data.get('is_debug_build')
+        if is_debug_build is not None and not isinstance(is_debug_build, bool):
+            raise InterfaceValidationError('Invalid value for "is_debug_build"')
+
         return cls(
             images=[cls.normalize_image(x) for x in data['images']],
             sdk_info=cls.normalize_sdk_info(data.get('sdk_info')),
+            is_debug_build=is_debug_build,
         )
 
     @staticmethod
@@ -70,8 +97,6 @@ class DebugMeta(Interface):
             raise InterfaceValidationError('Unknown image type %r' % image)
         rv = func(image)
         assert 'uuid' in rv, 'debug image normalizer did not produce a UUID'
-        assert 'image_addr' in rv, 'debug image normalizer did not ' \
-            'produce an object address'
         rv['type'] = ty
         return rv
 
@@ -86,10 +111,10 @@ class DebugMeta(Interface):
                 'version_major': sdk_info['version_major'],
                 'version_minor': sdk_info['version_minor'],
                 'version_patchlevel': sdk_info.get('version_patchlevel') or 0,
+                'build': sdk_info.get('build'),
             }
         except KeyError as e:
-            raise InterfaceValidationError('Missing value for sdk_info: %s'
-                                           % e.args[0])
+            raise InterfaceValidationError('Missing value for sdk_info: %s' % e.args[0])
 
     def get_path(self):
         return 'debug_meta'

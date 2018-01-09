@@ -16,10 +16,7 @@ def resolve_short_id_scenario(runner):
     group = Group.objects.filter(project=runner.default_project).first()
     runner.request(
         method='GET',
-        path='/organizations/%s/shortids/%s/' % (
-            runner.org.slug,
-            group.qualified_short_id,
-        )
+        path='/organizations/%s/shortids/%s/' % (runner.org.slug, group.qualified_short_id, )
     )
 
 
@@ -40,13 +37,15 @@ class ShortIdLookupEndpoint(OrganizationEndpoint):
         :auth: required
         """
         try:
-            group = Group.objects.by_qualified_short_id(organization, short_id)
+            group = Group.objects.by_qualified_short_id(organization.id, short_id)
         except Group.DoesNotExist:
             raise ResourceDoesNotExist()
 
-        return Response({
-            'organizationSlug': organization.slug,
-            'projectSlug': group.project.slug,
-            'groupId': six.text_type(group.id),
-            'shortId': group.qualified_short_id,
-        })
+        return Response(
+            {
+                'organizationSlug': organization.slug,
+                'projectSlug': group.project.slug,
+                'groupId': six.text_type(group.id),
+                'shortId': group.qualified_short_id,
+            }
+        )

@@ -8,6 +8,7 @@ from datetime import timedelta
 from django.core import mail
 from django.core.urlresolvers import reverse
 from django.db import connection
+from django.http import HttpRequest
 from django.utils import timezone
 from exam import fixture
 
@@ -59,15 +60,21 @@ class LostPasswordTest(TestCase):
         )
 
     def test_send_recover_mail(self):
+        request = HttpRequest()
+        request.method = 'GET'
+        request.META['REMOTE_ADDR'] = '1.1.1.1'
+
         with self.options({'system.url-prefix': 'http://testserver'}), self.tasks():
-            self.password_hash.send_recover_mail()
+            self.password_hash.send_email(request)
 
         assert len(mail.outbox) == 1
         msg = mail.outbox[0]
         assert msg.to == [self.user.email]
         assert msg.subject == '[Sentry] Password Recovery'
-        url = 'http://testserver' + reverse('sentry-account-recover-confirm',
-            args=[self.password_hash.user_id, self.password_hash.hash])
+        url = 'http://testserver' + reverse(
+            'sentry-account-recover-confirm',
+            args=[self.password_hash.user_id, self.password_hash.hash]
+        )
         assert url in msg.body
 
 
@@ -106,7 +113,8 @@ class EventNodeStoreTest(TestCase):
             event_id = connection.ops.fetch_returned_insert_id(cursor)
         else:
             event_id = connection.ops.last_insert_id(
-                cursor, Event._meta.db_table, Event._meta.pk.column)
+                cursor, Event._meta.db_table, Event._meta.pk.column
+            )
 
         event = Event.objects.get(id=event_id)
         assert type(event.data) == NodeData

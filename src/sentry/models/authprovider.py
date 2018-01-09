@@ -3,10 +3,9 @@ from __future__ import absolute_import, print_function
 from bitfield import BitField
 from django.db import models
 from django.utils import timezone
-from jsonfield import JSONField
 
 from sentry.db.models import (
-    BoundedPositiveIntegerField, FlexibleForeignKey, Model, sane_repr
+    BoundedPositiveIntegerField, EncryptedJsonField, FlexibleForeignKey, Model, sane_repr
 )
 
 
@@ -15,7 +14,7 @@ class AuthProvider(Model):
 
     organization = FlexibleForeignKey('sentry.Organization', unique=True)
     provider = models.CharField(max_length=128)
-    config = JSONField()
+    config = EncryptedJsonField()
 
     date_added = models.DateTimeField(default=timezone.now)
     sync_time = BoundedPositiveIntegerField(null=True)
@@ -28,9 +27,10 @@ class AuthProvider(Model):
     # through.
     default_teams = models.ManyToManyField('sentry.Team', blank=True)
 
-    flags = BitField(flags=(
-        ('allow_unlinked', 'Grant access to members who have not linked SSO accounts.'),
-    ), default=0)
+    flags = BitField(
+        flags=(('allow_unlinked', 'Grant access to members who have not linked SSO accounts.'), ),
+        default=0
+    )
 
     class Meta:
         app_label = 'sentry'

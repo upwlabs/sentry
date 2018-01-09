@@ -11,9 +11,11 @@ from django.core.urlresolvers import reverse
 from django.utils.html import format_html
 
 from sentry.api.serializers.models.plugin import PluginSerializer
-from sentry.exceptions import InvalidIdentity, PluginError
+# api compat
+from sentry.exceptions import PluginError  # NOQA
 from sentry.models import Activity, Event, GroupMeta
 from sentry.plugins import Plugin
+from sentry.plugins.base.configuration import react_plugin_config
 from sentry.plugins.endpoints import PluginGroupEndpoint
 from sentry.signals import issue_tracker_used
 from sentry.utils.auth import get_auth_providers
@@ -29,13 +31,15 @@ class IssueGroupActionEndpoint(PluginGroupEndpoint):
     def _handle(self, request, group, *args, **kwargs):
         GroupMeta.objects.populate_cache([group])
 
-        return getattr(self.plugin, self.view_method_name)(
-            request, group, *args, **kwargs)
+        return getattr(self.plugin, self.view_method_name)(request, group, *args, **kwargs)
 
 
 class IssueTrackingPlugin2(Plugin):
     auth_provider = None
     allowed_actions = ('create', 'link', 'unlink')
+
+    def configure(self, project, request):
+        return react_plugin_config(self, project, request)
 
     def get_plugin_type(self):
         return 'issue-tracking'
@@ -76,7 +80,8 @@ class IssueTrackingPlugin2(Plugin):
         for action in self.allowed_actions:
             view_method_name = 'view_%s' % action
             _urls.append(
-                url(r'^%s/' % action,
+                url(
+                    r'^%s/' % action,
                     PluginGroupEndpoint.as_view(
                         view=getattr(self, view_method_name),
                     ),
@@ -109,23 +114,27 @@ class IssueTrackingPlugin2(Plugin):
         if not request.user.is_authenticated():
             return True
 
-        return not UserSocialAuth.objects.filter(user=request.user, provider=self.auth_provider).exists()
+        return not UserSocialAuth.objects.filter(
+            user=request.user, provider=self.auth_provider
+        ).exists()
 
     def get_new_issue_fields(self, request, group, event, **kwargs):
         """
         If overriding, supported properties include 'readonly': true
         """
-        return [{
-            'name': 'title',
-            'label': 'Title',
-            'default': self.get_group_title(request, group, event),
-            'type': 'text'
-        }, {
-            'name': 'description',
-            'label': 'Description',
-            'default': self.get_group_description(request, group, event),
-            'type': 'textarea'
-        }]
+        return [
+            {
+                'name': 'title',
+                'label': 'Title',
+                'default': self.get_group_title(request, group, event),
+                'type': 'text'
+            }, {
+                'name': 'description',
+                'label': 'Description',
+                'default': self.get_group_description(request, group, event),
+                'type': 'textarea'
+            }
+        ]
 
     def get_link_existing_issue_fields(self, request, group, event, **kwargs):
         return []
@@ -182,34 +191,17 @@ class IssueTrackingPlugin2(Plugin):
                     errors[field['name']] = u'%s is a required field.' % field['label']
         return errors
 
-    def handle_api_error(self, error):
-        context = {
-            'error_type': 'unknown',
-        }
-        if isinstance(error, InvalidIdentity):
-            context.update({
-                'error_type': 'auth',
-                'auth_url': reverse('socialauth_associate', args=[self.auth_provider])
-            })
-            status = 400
-        elif isinstance(error, PluginError):
-            # TODO(dcramer): we should have a proper validation error
-            context.update({
-                'error_type': 'validation',
-                'errors': {'__all__': error.message},
-            })
-            status = 400
-        else:
-            self.logger.exception(six.text_type(error))
-            status = 500
-        return Response(context, status=status)
-
     def view_create(self, request, group, **kwargs):
         auth_errors = self.check_config_and_auth(request, group)
         if auth_errors:
             return Response(auth_errors, status=400)
 
         event = group.get_latest_event()
+        if event is None:
+            return Response({
+                'message': 'Unable to create issues: there are '
+                           'no events associated with this group',
+            }, status=400)
         Event.objects.bind_nodes([event], 'data')
         try:
             fields = self.get_new_issue_fields(request, group, event, **kwargs)
@@ -220,10 +212,7 @@ class IssueTrackingPlugin2(Plugin):
 
         errors = self.validate_form(fields, request.DATA)
         if errors:
-            return Response({
-                'error_type': 'validation',
-                'errors': errors
-            }, status=400)
+            return Response({'error_type': 'validation', 'errors': errors}, status=400)
 
         try:
             issue_id = self.create_issue(
@@ -249,7 +238,9 @@ class IssueTrackingPlugin2(Plugin):
             data=issue_information,
         )
 
-        issue_tracker_used.send(plugin=self, project=group.project, user=request.user, sender=IssueTrackingPlugin2)
+        issue_tracker_used.send(
+            plugin=self, project=group.project, user=request.user, sender=IssueTrackingPlugin2
+        )
         return Response({'issue_url': self.get_issue_url(group=group, issue_id=issue_id)})
 
     def view_unlink(self, request, group, **kwargs):
@@ -276,10 +267,7 @@ class IssueTrackingPlugin2(Plugin):
             return Response(fields)
         errors = self.validate_form(fields, request.DATA)
         if errors:
-            return Response({
-                'error_type': 'validation',
-                'errors': errors
-            }, status=400)
+            return Response({'error_type': 'validation', 'errors': errors}, status=400)
 
         try:
             issue_id = int(request.DATA['issue_id'])
@@ -325,7 +313,8 @@ class IssueTrackingPlugin2(Plugin):
 
     def check_config_and_auth(self, request, group):
         has_auth_configured = self.has_auth_configured()
-        if not (has_auth_configured and self.is_configured(project=group.project, request=request)):
+        if not (has_auth_configured and self.is_configured(
+                project=group.project, request=request)):
             if self.auth_provider:
                 required_auth_settings = settings.AUTH_PROVIDERS[self.auth_provider]
             else:
@@ -333,8 +322,6 @@ class IssueTrackingPlugin2(Plugin):
 
             return {
                 'error_type': 'config',
-                'title': self.get_title(),
-                'slug': self.slug,
                 'has_auth_configured': has_auth_configured,
                 'auth_provider': self.auth_provider,
                 'required_auth_settings': required_auth_settings,
@@ -343,7 +330,6 @@ class IssueTrackingPlugin2(Plugin):
         if self.needs_auth(project=group.project, request=request):
             return {
                 'error_type': 'auth',
-                'title': self.get_title(),
                 'auth_url': reverse('socialauth_associate', args=[self.auth_provider])
             }
 
@@ -355,7 +341,10 @@ class IssueTrackingPlugin2(Plugin):
         item = {
             'slug': self.slug,
             'allowed_actions': self.allowed_actions,
-            'title': self.get_title()
+            # TODO(dcramer): remove in Sentry 8.22+
+            'title': self.get_title(),
+            'name': self.get_title(),
+            'shortName': self.get_short_title(),
         }
         if issue_id:
             item['issue'] = {
@@ -378,11 +367,15 @@ class IssueTrackingPlugin2(Plugin):
         if not issue_id:
             return tag_list
 
-        tag_list.append(format_html('<a href="{}">{}</a>',
-            self.get_issue_url(group=group, issue_id=issue_id),
-            self.get_issue_label(group=group, issue_id=issue_id),
-        ))
+        tag_list.append(
+            format_html(
+                '<a href="{}">{}</a>',
+                self.get_issue_url(group=group, issue_id=issue_id),
+                self.get_issue_label(group=group, issue_id=issue_id),
+            )
+        )
 
         return tag_list
+
 
 IssuePlugin2 = IssueTrackingPlugin2

@@ -1,11 +1,11 @@
+import PropTypes from 'prop-types';
 import React from 'react';
 import ConfigStore from '../../../stores/configStore';
 import GroupEventDataSection from '../eventDataSection';
-import PropTypes from '../../../proptypes';
+import SentryTypes from '../../../proptypes';
 import {t} from '../../../locale';
 import CrashHeader from './crashHeader';
 import CrashContent from './crashContent';
-
 
 export function isStacktraceNewestFirst() {
   let user = ConfigStore.get('user');
@@ -22,28 +22,28 @@ export function isStacktraceNewestFirst() {
   }
 }
 
+class StacktraceInterface extends React.Component {
+  static propTypes = {
+    group: SentryTypes.Group.isRequired,
+    event: SentryTypes.Event.isRequired,
+    type: PropTypes.string.isRequired,
+    data: PropTypes.object.isRequired,
+    platform: PropTypes.string,
+  };
 
-const StacktraceInterface = React.createClass({
-  propTypes: {
-    group: PropTypes.Group.isRequired,
-    event: PropTypes.Event.isRequired,
-    type: React.PropTypes.string.isRequired,
-    data: React.PropTypes.object.isRequired,
-    platform: React.PropTypes.string
-  },
-
-  getInitialState() {
-    return {
+  constructor(...args) {
+    super(...args);
+    this.state = {
       stackView: this.props.data.hasSystemFrames ? 'app' : 'full',
       newestFirst: isStacktraceNewestFirst(),
     };
-  },
+  }
 
-  toggleStack(value) {
+  toggleStack = value => {
     this.setState({
-      stackView: value
+      stackView: value,
     });
-  },
+  };
 
   render() {
     let group = this.props.group;
@@ -56,10 +56,11 @@ const StacktraceInterface = React.createClass({
       <CrashHeader
         title={t('Stacktrace')}
         group={group}
+        platform={evt.platform}
         stacktrace={data}
         stackView={stackView}
         newestFirst={newestFirst}
-        onChange={(newState) => {
+        onChange={newState => {
           this.setState(newState);
         }}
       />
@@ -67,20 +68,22 @@ const StacktraceInterface = React.createClass({
 
     return (
       <GroupEventDataSection
-          group={group}
-          event={evt}
-          type={this.props.type}
-          title={title}
-          wrapTitle={false}>
+        group={group}
+        event={evt}
+        type={this.props.type}
+        title={title}
+        wrapTitle={false}
+      >
         <CrashContent
           group={group}
           event={evt}
           stackView={stackView}
           newestFirst={newestFirst}
-          stacktrace={data} />
+          stacktrace={data}
+        />
       </GroupEventDataSection>
     );
   }
-});
+}
 
 export default StacktraceInterface;

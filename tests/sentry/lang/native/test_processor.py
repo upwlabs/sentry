@@ -3,53 +3,64 @@ from __future__ import absolute_import
 from mock import patch
 
 from sentry.testutils import TestCase
-from sentry.lang.native.plugin import resolve_frame_symbols
-
+from sentry.lang.native.plugin import NativeStacktraceProcessor
+from sentry.lang.native.symbolizer import Symbolizer
+from sentry.stacktraces import process_stacktraces
 
 OBJECT_NAME = (
     "/var/containers/Bundle/Application/B33C37A8-F933-4B6B-9FFA-152282BFDF13/"
     "SentryTest.app/SentryTest"
 )
 
-SDK_INFO = {
-    "dsym_type": "macho",
-    "sdk_name": "iOS",
-    "version_major": 9,
-    "version_minor": 3,
-    "version_patchlevel": 0
-}
+FRAMEWORK_OBJECT_NAME = (
+    "/var/containers/Bundle/Application/B33C37A8-F933-4B6B-9FFA-152282BFDF13/"
+    "SentryTest.app/Frameworks/foo.dylib"
+)
+
+SWIFT_OBJECT_NAME = (
+    "/var/containers/Bundle/Application/B33C37A8-F933-4B6B-9FFA-152282BFDF13/"
+    "SentryTest.app/Frameworks/libswiftCore.dylib"
+)
+
+SDK_INFO = {"sdk_name": "iOS", "version_major": 9,
+            "version_minor": 3, "version_patchlevel": 0}
 
 
-def patched_symbolize_app_frame(self, frame):
-    if frame['instruction_addr'] == 4295123760:
-        return {
+def patched_symbolize_app_frame(self, instruction_addr, img, sdk_info=None):
+    return [
+        {
             'filename': 'Foo.swift',
-            'line': 42,
-            'column': 23,
-            'object_name': OBJECT_NAME,
-            'symbol_name': 'real_main',
-            'symbol_addr': '0x1000262a0',
-            'instruction_addr': '0x100026330',
+            'abs_path': 'Foo.swift',
+            'lineno': 42,
+            'colno': 23,
+            'package': OBJECT_NAME,
+            'function': 'real_main',
         }
+    ]
 
 
-def patched_symbolize_system_frame(self, frame, sdk_info):
-    assert sdk_info == SDK_INFO
-    if frame['instruction_addr'] == 4295123360:
-        return {
-            'object_name': '/usr/lib/whatever.dylib',
-            'symbol_name': 'whatever_system',
-            'symbol_addr': '0x100026110',
-            'instruction_addr': '0x1000261a0',
-        }
+def patched_convert_symbolserver_match(self, instruction_addr, symbolserver_match, img):
+    if 6016 <= instruction_addr < 6020:
+        return [
+            {
+                'abs_path': None,
+                'filename': None,
+                'package': '/usr/lib/whatever.dylib',
+                'function': 'whatever_system',
+            }
+        ]
+    return []
 
 
 class BasicResolvingFileTest(TestCase):
-
-    @patch('sentry.lang.native.symbolizer.Symbolizer.symbolize_app_frame',
-           new=patched_symbolize_app_frame)
-    @patch('sentry.lang.native.symbolizer.Symbolizer.symbolize_system_frame',
-           new=patched_symbolize_system_frame)
+    @patch(
+        'sentry.lang.native.symbolizer.Symbolizer._symbolize_app_frame',
+        new=patched_symbolize_app_frame
+    )
+    @patch(
+        'sentry.lang.native.symbolizer.Symbolizer._convert_symbolserver_match',
+        new=patched_convert_symbolserver_match
+    )
     def test_frame_resolution(self):
         event_data = {
             "sentry.interfaces.User": {
@@ -65,13 +76,24 @@ class BasicResolvingFileTest(TestCase):
                         "cpu_subtype": 0,
                         "uuid": "C05B4DDD-69A7-3840-A649-32180D341587",
                         "image_vmaddr": 4294967296,
-                        "image_addr": 4295098368,
+                        "image_addr": 4295121760,
                         "cpu_type": 16777228,
                         "image_size": 32768,
                         "name": OBJECT_NAME,
+                    }, {
+                        "type": "apple",
+                        "cpu_subtype": 0,
+                        "cpu_type": 16777228,
+                        "uuid": "B78CB4FB-3A90-4039-9EFD-C58932803AE5",
+                        "image_vmaddr": 0,
+                        "image_addr": 6000,
+                        "cpu_type": 16777228,
+                        "image_size": 32768,
+                        'name': '/usr/lib/whatever.dylib',
                     }
                 ],
-                "sdk_info": SDK_INFO,
+                "sdk_info":
+                SDK_INFO,
             },
             "sentry.interfaces.Exception": {
                 "values": [
@@ -81,27 +103,19 @@ class BasicResolvingFileTest(TestCase):
                                 {
                                     "function": "<redacted>",
                                     "abs_path": None,
-                                    "instruction_offset": 4,
                                     "package": "/usr/lib/system/libdyld.dylib",
                                     "filename": None,
-                                    "symbol_addr": "0x002ac28b4",
                                     "lineno": None,
                                     "in_app": False,
-                                    "instruction_addr": "0x002ac28b8"
-                                },
-                                {
+                                    "instruction_addr": 6010,
+                                }, {
                                     "function": "main",
-                                    "instruction_addr": 4295123760,
-                                    "symbol_addr": 4295123616,
-                                    "image_addr": 4295098368
-                                },
-                                {
+                                    "instruction_addr": 4295123760
+                                }, {
                                     "function": "whatever_system",
-                                    "instruction_addr": 4295123360,
-                                    "symbol_addr": 4295123216,
-                                    "image_addr": 4295092368
-                                },
-                                {
+                                    "instruction_addr": 6020,
+                                    "symbol_addr": 6016,
+                                }, {
                                     "platform": "javascript",
                                     "function": "merge",
                                     "abs_path": "/scripts/views.js",
@@ -114,7 +128,8 @@ class BasicResolvingFileTest(TestCase):
                                 }
                             ]
                         },
-                        "type": "NSRangeException",
+                        "type":
+                        "NSRangeException",
                         "mechanism": {
                             "posix_signal": {
                                 "signal": 6,
@@ -153,22 +168,83 @@ class BasicResolvingFileTest(TestCase):
             }
         }
 
-        resolve_frame_symbols(event_data)
+        def make_processors(data, infos):
+            return [NativeStacktraceProcessor(data, infos)]
+
+        event_data = process_stacktraces(
+            event_data, make_processors=make_processors)
 
         bt = event_data['sentry.interfaces.Exception']['values'][0]['stacktrace']
         frames = bt['frames']
 
         assert frames[0]['function'] == '<redacted>'
-        assert frames[0]['instruction_addr'] == '0x002ac28b8'
+        assert frames[0]['instruction_addr'] == 6010
 
         assert frames[1]['function'] == 'real_main'
         assert frames[1]['lineno'] == 42
         assert frames[1]['colno'] == 23
         assert frames[1]['package'] == OBJECT_NAME
-        assert frames[1]['instruction_addr'] == '0x100026330'
-        assert frames[1].get('instruction_offset') is None
+        assert frames[1]['instruction_addr'] == 4295123760
 
         assert frames[2]['function'] == 'whatever_system'
         assert frames[2]['package'] == '/usr/lib/whatever.dylib'
-        assert frames[2]['instruction_addr'] == '0x1000261a0'
-        assert frames[2].get('instruction_offset') == 144
+        assert frames[2]['instruction_addr'] == 6020
+
+
+class BasicInAppTest(TestCase):
+    def test_in_app_detection(self):
+        sym = Symbolizer(
+            self.project, [
+                {
+                    "type": "apple",
+                    "cpu_subtype": 0,
+                    "uuid": "C05B4DDD-69A7-3840-A649-32180D341587",
+                    "image_vmaddr": 4294967296,
+                    "image_addr": 4295121760,
+                    "cpu_type": 16777228,
+                    "image_size": 32768,
+                    "name": OBJECT_NAME,
+                }, {
+                    "type": "apple",
+                    "cpu_subtype": 0,
+                    "uuid": "619FA17B-124F-4CBF-901F-6CE88B52B0BF",
+                    "image_vmaddr": 4295000064,
+                    "image_addr": 4295154528,
+                    "cpu_type": 16777228,
+                    "image_size": 32768,
+                    "name": FRAMEWORK_OBJECT_NAME,
+                }, {
+                    "type": "apple",
+                    "cpu_subtype": 0,
+                    "uuid": "2DA67FF5-2643-44D6-8FFF-1B6BC78C9912",
+                    "image_vmaddr": 4295032832,
+                    "image_addr": 4295187296,
+                    "cpu_type": 16777228,
+                    "image_size": 32768,
+                    "name": SWIFT_OBJECT_NAME,
+                }, {
+                    "type": "apple",
+                    "cpu_subtype": 0,
+                    "cpu_type": 16777228,
+                    "uuid": "B78CB4FB-3A90-4039-9EFD-C58932803AE5",
+                    "image_vmaddr": 0,
+                    "image_addr": 6000,
+                    "cpu_type": 16777228,
+                    "image_size": 32768,
+                    'name': '/usr/lib/whatever.dylib',
+                }
+            ],
+            referenced_images=set(
+                [
+                    'C05B4DDD-69A7-3840-A649-32180D341587',
+                    'B78CB4FB-3A90-4039-9EFD-C58932803AE5',
+                    '619FA17B-124F-4CBF-901F-6CE88B52B0BF',
+                    '2DA67FF5-2643-44D6-8FFF-1B6BC78C9912',
+                ]
+            ),
+        )
+
+        assert sym.is_in_app(4295121764)
+        assert not sym.is_in_app(6042)
+        assert sym.is_in_app(4295154570)
+        assert not sym.is_in_app(4295032874)

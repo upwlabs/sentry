@@ -30,7 +30,9 @@ class UserTest(TestCase):
         assert self.interface.to_json() == {
             'id': '1',
             'email': 'lol@example.com',
-            'data': {'favorite_color': 'brown'}
+            'data': {
+                'favorite_color': 'brown'
+            }
         }
 
     def test_invalid_ip_address(self):
@@ -49,6 +51,12 @@ class UserTest(TestCase):
             User.to_python(dict(
                 email='foo',
             ))
+
+    def test_id_long_dict(self):
+        u = User.to_python({
+            'id': {x: 'foobarbaz' for x in range(10)},  # dict longer than 128 chars
+        })
+        assert len(u.to_json()['id']) == 128
 
     def test_serialize_unserialize_behavior(self):
         result = type(self.interface).to_python(self.interface.to_json())
